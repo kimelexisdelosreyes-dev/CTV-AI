@@ -1,6 +1,6 @@
 [project]
 name = "ctv-ai-core"
-version = "0.1.0-alpha"
+version = "1.0.0"
 description = "Local-first AI platform for multimedia production"
 requires-python = ">=3.12"
 

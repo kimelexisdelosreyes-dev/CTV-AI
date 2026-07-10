@@ -20,4 +20,4 @@ def test_health() -> None:
 def test_version() -> None:
     response = client.get("/api/v1/version")
     assert response.status_code == 200
-    assert "version" in response.json()
+    assert response.json()["version"] == "1.0.0"

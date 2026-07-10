@@ -1,32 +1,24 @@
 # Roadmap
 
-## Milestone 1 — Foundation
-- FastAPI
-- Ollama
-- Chat
-- Logging
-- Configuration
-- Tests
-- Docker
-
-## Milestone 2 — AI Identity
-- Specialist assistants
-- Prompt management
-- Model routing
-
-## Milestone 3 — Company Knowledge
-- Document ingestion
-- Vector search
-- Source-grounded answers
-
-## Milestone 4 — Access Control
+## v1.1
+- Authentication
 - Users
 - Roles
-- Authentication
 - Audit logs
 
-## Milestone 5 — Multimedia Intelligence
-- Transcription
+## v1.2
+- Company knowledge
+- Document ingestion
+- Vector search
+- Citations
+
+## v1.3
+- Conversation memory
+- Saved sessions
+- User preferences
+
+## v2.0
+- NAS indexing
 - Media metadata
-- NAS search
+- Whisper transcription
 - Adobe and DaVinci integrations

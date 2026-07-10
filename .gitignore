@@ -8,3 +8,6 @@ logs/
 *.log
 .vscode/
 .idea/
+backups/*
+!backups/.gitkeep
+company_data/private/

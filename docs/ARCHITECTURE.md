@@ -2,21 +2,30 @@
 
 ## Request Flow
 
-Client → FastAPI API → AI Router → Ollama Service → Local Ollama Model
+Open WebUI or another client
+→ CTV-AI Core
+→ Assistant Router
+→ Ollama Service
+→ Local Qwen model
 
-## Modules
+## Main API Groups
 
-- `app/api`: HTTP routes
-- `app/core`: settings, prompts, logging
-- `app/schemas`: request and response models
-- `app/services`: AI routing and Ollama access
-- `tests`: automated smoke tests
+- `/api/v1/*` for native CTV-AI endpoints
+- `/v1/*` for OpenAI-compatible clients
 
-## Future Milestones
+## Main Components
+
+- `app/api`: routes
+- `app/core`: configuration, logging, prompts
+- `app/schemas`: validation models
+- `app/services`: routing and Ollama access
+- `tests`: automated tests
+
+## Future Modules
 
 - Authentication and roles
-- Company knowledge with RAG
+- RAG and document ingestion
 - Conversation memory
-- NAS and media indexing
+- NAS and media search
 - Whisper transcription
 - Adobe and DaVinci integrations

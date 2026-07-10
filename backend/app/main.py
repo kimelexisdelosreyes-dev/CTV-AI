@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api.router import api_router
+from app.api.router import api_router, openai_router
 from app.core.config import settings
 from app.core.logging import configure_logging
 
@@ -21,6 +21,7 @@ app = FastAPI(
 )
 
 app.include_router(api_router, prefix=settings.api_v1_prefix)
+app.include_router(openai_router, prefix="/v1")
 
 
 @app.get("/", tags=["root"])

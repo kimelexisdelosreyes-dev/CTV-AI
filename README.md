@@ -1,79 +1,66 @@
-# CTV-AI Starter
+# CTV-AI Canonical Repository
 
-CTV-AI is a local-first AI platform foundation for a small multimedia company.
+CTV-AI is a local-first AI platform for a small multimedia company.
 
-## Milestone 1 Features
+This repository is the single source of truth moving forward.
+
+## Included
 
 - FastAPI backend
 - Ollama integration
-- General, Production, Graphics, Drone, and IT assistants
-- Health and version endpoints
-- Environment-based configuration
-- Structured application logging
-- Pytest smoke tests
+- OpenAI-compatible API for Open WebUI
+- Specialist assistants
+- Streaming chat
+- Environment configuration
+- Logging
+- Tests
 - Docker support
-- Windows PowerShell startup script
+- Windows startup scripts
+- Documentation
 
-## Requirements
+## Specialist Models
 
-- Windows 11 Pro
-- Python 3.12
-- Ollama running locally
-- A downloaded model such as `qwen3:14b`
-- Optional: Docker Desktop
+- `ctv-ai-general`
+- `ctv-ai-production`
+- `ctv-ai-graphics`
+- `ctv-ai-drone`
+- `ctv-ai-it`
 
-## Quick Start on Windows
-
-Open PowerShell:
+## Quick Start
 
 ```powershell
 cd B:\CTV_AI\backend
 Set-ExecutionPolicy -Scope Process RemoteSigned
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-Copy-Item .env.example .env
-python -m uvicorn app.main:app --reload
+.\start.ps1
 ```
 
 Open:
 
-- API docs: http://127.0.0.1:8000/docs
-- Health: http://127.0.0.1:8000/api/v1/health
-- Version: http://127.0.0.1:8000/api/v1/version
-
-## Test Chat
-
-In Swagger, open `POST /api/v1/chat` and submit:
-
-```json
-{
-  "message": "Introduce yourself in one sentence.",
-  "assistant": "general"
-}
+```text
+http://127.0.0.1:8000/docs
 ```
 
-Available assistants:
+## Open WebUI Connection
 
-- `general`
-- `production`
-- `graphics`
-- `drone`
-- `it`
+```text
+Base URL: http://host.docker.internal:8000/v1
+API Key: ctv-ai-local
+```
 
-## Run Tests
+## Tests
 
 ```powershell
+cd B:\CTV_AI\backend
+.\.venv\Scripts\Activate.ps1
 python -m pytest
 ```
 
-## Git Baseline
-
-After confirming the project works:
+## Canonical Git Baseline
 
 ```powershell
 git add .
-git commit -m "feat(core): initialize CTV-AI platform"
-git tag v0.1.0-alpha
+git commit -m "feat(core): establish canonical CTV-AI platform"
+git tag v1.0.0
 git push -u origin main
-git push origin v0.1.0-alpha
+git push origin v1.0.0
 ```

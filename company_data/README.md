@@ -1,6 +1,5 @@
 # Company Data
 
-This directory is reserved for approved company documents used in future RAG milestones.
+Use this folder for approved documents in a future RAG milestone.
 
-Do not commit confidential source documents to Git unless the repository and access controls
-have been reviewed. Prefer secure local storage and add confidential directories to `.gitignore`.
+Do not commit confidential documents until access controls and repository policy have been reviewed.

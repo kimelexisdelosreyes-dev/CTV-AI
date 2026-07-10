@@ -1,4 +1,6 @@
+import json
 import logging
+from collections.abc import AsyncIterator
 
 import httpx
 
@@ -41,6 +43,37 @@ class OllamaService:
             raise OllamaServiceError("Ollama returned an empty or invalid response.")
 
         return content
+
+    async def stream_chat(
+        self,
+        messages: list[dict[str, str]],
+    ) -> AsyncIterator[str]:
+        payload = {
+            "model": settings.ollama_model,
+            "messages": messages,
+            "stream": True,
+        }
+
+        try:
+            async with httpx.AsyncClient(
+                base_url=settings.ollama_base_url,
+                timeout=settings.request_timeout_seconds,
+            ) as client:
+                async with client.stream("POST", "/api/chat", json=payload) as response:
+                    response.raise_for_status()
+
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
+                        data = json.loads(line)
+                        content = data.get("message", {}).get("content", "")
+                        if content:
+                            yield content
+        except (httpx.HTTPError, json.JSONDecodeError) as exc:
+            logger.exception("Ollama streaming request failed")
+            raise OllamaServiceError(
+                "CTV-AI lost its connection to Ollama while streaming."
+            ) from exc
 
 
 ollama_service = OllamaService()

@@ -1,15 +1,19 @@
 # Changelog
 
-## v0.1.0-alpha
+## v1.0.0
 
 ### Added
 
-- FastAPI application foundation
-- Ollama chat integration
-- Assistant routing
+- Canonical FastAPI backend
+- Ollama service
+- OpenAI-compatible API
+- Open WebUI support
+- Streaming chat completions
+- Five specialist assistants
 - Health and version endpoints
-- Configuration via `.env`
+- Environment-based configuration
 - Logging
-- Basic tests
+- Tests
 - Docker support
-- Windows startup script
+- Windows scripts
+- Documentation
