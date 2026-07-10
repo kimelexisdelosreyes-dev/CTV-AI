@@ -1,0 +1,19 @@
+services:
+  ctv-ai-core:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: ctv-ai-core
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      APP_NAME: CTV-AI Core
+      APP_VERSION: 0.1.0-alpha
+      API_V1_PREFIX: /api/v1
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      OLLAMA_MODEL: qwen3:14b
+      LOG_LEVEL: INFO
+      REQUEST_TIMEOUT_SECONDS: 180
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
