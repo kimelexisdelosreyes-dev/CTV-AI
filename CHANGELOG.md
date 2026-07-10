@@ -1,5 +1,33 @@
 # Changelog
 
+## v1.2.0
+
+### Added
+
+- Multi-model registry
+- Automatic specialist routing
+- Manual assistant override
+- Protected orchestrator endpoints
+- Open WebUI automatic model
+- Ollama model availability checks
+- Routing audit records
+- Orchestrator migration
+- Routing tests
+
+## v1.1.0
+
+### Added
+
+- PostgreSQL persistence
+- Async SQLAlchemy database layer
+- Alembic migrations
+- JWT login and current-user endpoints
+- User roles
+- Administrator bootstrap command
+- Qdrant service
+- Infrastructure health endpoint
+- Security documentation
+
 ## v1.0.0
 
 ### Added

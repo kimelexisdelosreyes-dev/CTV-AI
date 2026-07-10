@@ -14,9 +14,34 @@ class OllamaServiceError(RuntimeError):
 
 
 class OllamaService:
-    async def chat(self, messages: list[dict[str, str]]) -> str:
+    async def list_models(self) -> set[str]:
+        try:
+            async with httpx.AsyncClient(
+                base_url=settings.ollama_base_url,
+                timeout=15.0,
+            ) as client:
+                response = await client.get("/api/tags")
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.exception("Could not list Ollama models")
+            raise OllamaServiceError(
+                "CTV-AI could not retrieve the installed Ollama models."
+            ) from exc
+
+        data = response.json()
+        return {
+            item.get("name", "")
+            for item in data.get("models", [])
+            if item.get("name")
+        }
+
+    async def chat(
+        self,
+        messages: list[dict[str, str]],
+        model: str | None = None,
+    ) -> str:
         payload = {
-            "model": settings.ollama_model,
+            "model": model or settings.ollama_model,
             "messages": messages,
             "stream": False,
         }
@@ -31,9 +56,7 @@ class OllamaService:
         except httpx.HTTPError as exc:
             logger.exception("Ollama request failed")
             raise OllamaServiceError(
-                "CTV-AI could not reach Ollama. Confirm that Ollama is running "
-                f"at {settings.ollama_base_url} and that model "
-                f"'{settings.ollama_model}' is installed."
+                "CTV-AI could not reach Ollama or the selected model."
             ) from exc
 
         data = response.json()
@@ -47,9 +70,10 @@ class OllamaService:
     async def stream_chat(
         self,
         messages: list[dict[str, str]],
+        model: str | None = None,
     ) -> AsyncIterator[str]:
         payload = {
-            "model": settings.ollama_model,
+            "model": model or settings.ollama_model,
             "messages": messages,
             "stream": True,
         }
@@ -65,8 +89,10 @@ class OllamaService:
                     async for line in response.aiter_lines():
                         if not line:
                             continue
+
                         data = json.loads(line)
                         content = data.get("message", {}).get("content", "")
+
                         if content:
                             yield content
         except (httpx.HTTPError, json.JSONDecodeError) as exc:

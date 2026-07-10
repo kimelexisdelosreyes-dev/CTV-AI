@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.schemas.openai import ChatCompletionsRequest
 from app.services.ai_router import ai_router
 from app.services.ollama_service import OllamaServiceError, ollama_service
+from app.services.orchestrator_service import orchestrator_service
 
 router = APIRouter(tags=["OpenAI compatibility"])
 
@@ -51,19 +52,35 @@ async def chat_completions(
 ):
     verify_api_key(authorization)
 
-    assistant = ai_router.assistant_for_model(request.model)
-    messages = ai_router.build_messages(
-        [message.model_dump() for message in request.messages],
-        assistant,
+    raw_messages = [message.model_dump() for message in request.messages]
+    last_user_message = next(
+        (
+            item["content"]
+            for item in reversed(raw_messages)
+            if item["role"] == "user"
+        ),
+        "",
     )
 
+    if request.model == "ctv-ai-auto":
+        route = await orchestrator_service.decide(last_user_message, "auto")
+        assistant = route.assistant
+        selected_model = route.model
+    else:
+        assistant = ai_router.assistant_for_model(request.model)
+        selected_model = settings.ollama_model
+
+    messages = ai_router.build_messages(raw_messages, assistant)
     completion_id = f"chatcmpl-{uuid.uuid4().hex}"
     created = int(time.time())
 
     if request.stream:
         async def event_stream() -> AsyncIterator[str]:
             try:
-                async for content in ollama_service.stream_chat(messages):
+                async for content in ollama_service.stream_chat(
+                    messages,
+                    model=selected_model,
+                ):
                     chunk = {
                         "id": completion_id,
                         "object": "chat.completion.chunk",
@@ -106,7 +123,10 @@ async def chat_completions(
         )
 
     try:
-        content = await ollama_service.chat(messages)
+        content = await ollama_service.chat(
+            messages,
+            model=selected_model,
+        )
     except OllamaServiceError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

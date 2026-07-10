@@ -14,7 +14,7 @@ MODEL_TO_ASSISTANT: dict[str, AssistantName] = {
 class AIRouter:
     @staticmethod
     def supported_models() -> list[str]:
-        return list(MODEL_TO_ASSISTANT)
+        return ["ctv-ai-auto", *MODEL_TO_ASSISTANT]
 
     @staticmethod
     def assistant_for_model(model: str) -> AssistantName:
