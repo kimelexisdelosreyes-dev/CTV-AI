@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api.router import api_router, openai_router
+from app.api.router import api_router, dashboard_router, openai_router
 from app.core.config import settings
 from app.core.logging import configure_logging
 
@@ -22,6 +22,7 @@ app = FastAPI(
 
 app.include_router(api_router, prefix=settings.api_v1_prefix)
 app.include_router(openai_router, prefix="/v1")
+app.include_router(dashboard_router)
 
 
 @app.get("/", tags=["root"])
@@ -31,4 +32,5 @@ async def root() -> dict[str, str]:
         "version": settings.app_version,
         "status": "running",
         "docs": "/docs",
+        "knowledge_dashboard": "/admin/knowledge",
     }

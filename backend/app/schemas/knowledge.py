@@ -1,0 +1,68 @@
+from datetime import datetime
+from typing import Literal
+from uuid import UUID
+
+from pydantic import BaseModel, Field
+
+
+class KnowledgeDocumentPublic(BaseModel):
+    id: UUID
+    filename: str
+    content_type: str
+    category: str
+    uploaded_by: str
+    status: str
+    chunk_count: int
+    error_message: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class KnowledgeStatsResponse(BaseModel):
+    total_documents: int
+    ready_documents: int
+    failed_documents: int
+    processing_documents: int
+    total_chunks: int
+    categories: dict[str, int]
+
+
+class KnowledgeSearchRequest(BaseModel):
+    query: str = Field(min_length=2, max_length=10_000)
+    top_k: int = Field(default=5, ge=1, le=20)
+    category: str | None = Field(default=None, max_length=100)
+
+
+class KnowledgeSource(BaseModel):
+    document_id: str
+    filename: str
+    category: str
+    chunk_index: int
+    page_number: int | None
+    text: str
+    score: float
+
+
+class KnowledgeSearchResponse(BaseModel):
+    query: str
+    sources: list[KnowledgeSource]
+
+
+class KnowledgeAskRequest(BaseModel):
+    question: str = Field(min_length=2, max_length=10_000)
+    top_k: int = Field(default=5, ge=1, le=12)
+    category: str | None = Field(default=None, max_length=100)
+    assistant: Literal[
+        "general",
+        "production",
+        "graphics",
+        "drone",
+        "it",
+        "coder",
+    ] = "general"
+
+
+class KnowledgeAskResponse(BaseModel):
+    answer: str
+    sources: list[KnowledgeSource]

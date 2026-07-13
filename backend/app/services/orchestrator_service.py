@@ -4,6 +4,7 @@ from app.core.model_registry import MODEL_REGISTRY
 from app.core.prompts import ASSISTANT_PROMPTS
 from app.db.models.orchestrator_event import OrchestratorEvent
 from app.schemas.orchestrator import RouteDecision
+from app.services.comedy_profile_service import build_profile_context, get_profile
 from app.services.intent_router import intent_router
 from app.services.ollama_service import ollama_service
 
@@ -46,17 +47,22 @@ class OrchestratorService:
         db: AsyncSession,
     ) -> tuple[str, RouteDecision]:
         route = await self.decide(message, override)
+
         prompt_key = (
             route.assistant
             if route.assistant in ASSISTANT_PROMPTS
             else "general"
         )
 
+        system_prompt = ASSISTANT_PROMPTS[prompt_key].strip()
+
+        if prompt_key == "comedy":
+            profile = await get_profile(db, user_email)
+            profile_context = build_profile_context(profile)
+            system_prompt = f"{system_prompt}\n\n{profile_context}"
+
         messages = [
-            {
-                "role": "system",
-                "content": ASSISTANT_PROMPTS[prompt_key].strip(),
-            },
+            {"role": "system", "content": system_prompt},
             *[
                 item
                 for item in conversation

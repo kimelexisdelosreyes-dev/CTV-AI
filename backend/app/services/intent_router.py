@@ -1,8 +1,6 @@
 import re
 from dataclasses import dataclass
 
-from app.core.model_registry import MODEL_REGISTRY
-
 
 @dataclass(frozen=True)
 class IntentResult:
@@ -12,6 +10,24 @@ class IntentResult:
 
 
 RULES: dict[str, tuple[str, ...]] = {
+    "comedy": (
+        "make me laugh",
+        "tell me a joke",
+        "joke",
+        "roast me",
+        "roast us",
+        "roast the team",
+        "burned out",
+        "burnt out",
+        "burnout",
+        "stress break",
+        "funny",
+        "humor",
+        "comedy",
+        "team banter",
+        "fake awards",
+        "office jokes",
+    ),
     "graphics": (
         "adobe firefly",
         "firefly prompt",

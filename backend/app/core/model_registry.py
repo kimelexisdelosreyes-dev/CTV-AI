@@ -55,6 +55,12 @@ def get_model_registry() -> dict[str, ModelProfile]:
             capabilities=("simple", "classification", "short-form"),
             description="Lightweight routing and simple tasks",
         ),
+        "comedy": ModelProfile(
+            key="comedy",
+            ollama_model=settings.ollama_comedy_model,
+            capabilities=("humor", "roast", "burnout", "banter", "taglish"),
+            description="Opt-in workplace humor and burnout breaks",
+        ),
     }
 
 

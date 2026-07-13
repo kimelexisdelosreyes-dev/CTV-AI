@@ -2,12 +2,13 @@ from app.core.prompts import ASSISTANT_PROMPTS
 from app.schemas.chat import AssistantName
 from app.services.ollama_service import ollama_service
 
-MODEL_TO_ASSISTANT: dict[str, AssistantName] = {
+MODEL_TO_ASSISTANT: dict[str, str] = {
     "ctv-ai-general": "general",
     "ctv-ai-production": "production",
     "ctv-ai-graphics": "graphics",
     "ctv-ai-drone": "drone",
     "ctv-ai-it": "it",
+    "ctv-ai-comedy": "comedy",
 }
 
 
@@ -17,13 +18,13 @@ class AIRouter:
         return ["ctv-ai-auto", *MODEL_TO_ASSISTANT]
 
     @staticmethod
-    def assistant_for_model(model: str) -> AssistantName:
+    def assistant_for_model(model: str) -> str:
         return MODEL_TO_ASSISTANT.get(model, "general")
 
     @staticmethod
     def build_messages(
         messages: list[dict[str, str]],
-        assistant: AssistantName,
+        assistant: str,
     ) -> list[dict[str, str]]:
         system_prompt = ASSISTANT_PROMPTS[assistant].strip()
         filtered_messages = [
