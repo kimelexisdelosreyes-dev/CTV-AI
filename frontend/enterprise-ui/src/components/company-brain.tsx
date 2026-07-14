@@ -28,6 +28,8 @@ export function CompanyBrain({ onStats }: Props) {
   const [answer, setAnswer] = useState("");
   const [busy, setBusy] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [askBusy, setAskBusy] = useState(false);
+  const [askError, setAskError] = useState("");
 
   async function refresh() {
     const [docs, stats] = await Promise.all([
@@ -92,22 +94,38 @@ export function CompanyBrain({ onStats }: Props) {
   }
 
   async function ask() {
-    setAnswer("Generating grounded answer…");
-    const result = await apiFetch<{ answer: string; sources: Source[] }>(
-      "/knowledge/ask",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          question,
-          top_k: 5,
-          category: null,
-          assistant: "general",
-        }),
-      },
-    );
+  if (askBusy || !question.trim()) return;
+
+  setAskBusy(true);
+  setAskError("");
+  setAnswer("Generating grounded answer…");
+
+  try {
+    const result = await apiFetch<{
+      answer: string;
+      sources: Source[];
+    }>("/knowledge/ask", {
+      method: "POST",
+      body: JSON.stringify({
+        question: question.trim(),
+        top_k: 3,
+        category: null,
+        assistant: "general",
+      }),
+    });
+
     setAnswer(result.answer);
     setSources(result.sources);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Company Brain request failed.";
+
+    setAnswer("");
+    setAskError(message);
+  } finally {
+    setAskBusy(false);
   }
+}
 
   return (
     <section>
@@ -150,7 +168,11 @@ export function CompanyBrain({ onStats }: Props) {
 
           <label>Grounded question</label>
           <textarea value={question} onChange={(e) => setQuestion(e.target.value)} />
-          <button onClick={ask}>Ask Company Brain</button>
+          <button onClick={ask} disabled={askBusy || !question.trim()}>
+            {askBusy ? "Generating…" : "Ask Company Brain"}
+          </button>
+
+{askError && <p className="error">{askError}</p>}
         </article>
       </div>
 
