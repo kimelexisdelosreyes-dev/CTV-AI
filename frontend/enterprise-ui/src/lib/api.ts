@@ -14,9 +14,17 @@ export type KnowledgeDocument = {
   category: string;
   uploaded_by: string;
   status: string;
+  stage: string;
+  progress_percent: number;
+  page_count: number;
+  pages_processed: number;
+  ocr_pages: number;
   chunk_count: number;
   error_message: string | null;
+  started_at: string | null;
+  completed_at: string | null;
   created_at: string;
+  updated_at: string;
 };
 
 export type KnowledgeStats = {
@@ -47,7 +55,9 @@ export async function apiFetch<T>(
 ): Promise<T> {
   const token = getToken();
   const headers = new Headers(options.headers);
+
   if (token) headers.set("Authorization", `Bearer ${token}`);
+
   if (!(options.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
@@ -78,6 +88,7 @@ export async function login(email: string, password: string): Promise<void> {
   });
 
   if (!response.ok) throw new Error("Incorrect email or password.");
+
   const payload = await response.json();
   setToken(payload.access_token);
 }

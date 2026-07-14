@@ -1,0 +1,22 @@
+/* Append these rules to globals.css if the patch script does not merge automatically. */
+.progress-track {
+  width: 130px;
+  height: 7px;
+  overflow: hidden;
+  background: #252d36;
+  border-radius: 999px;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--orange);
+  border-radius: inherit;
+  transition: width .3s ease;
+}
+.compact-button {
+  width: auto !important;
+  padding: 7px 10px !important;
+  margin: 0 8px 5px 0 !important;
+  border: 0;
+  color: white;
+  border-radius: 8px;
+}

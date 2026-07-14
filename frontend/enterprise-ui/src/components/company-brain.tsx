@@ -1,11 +1,7 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
-import {
-  apiFetch,
-  KnowledgeDocument,
-  KnowledgeStats,
-} from "@/lib/api";
+import { FormEvent, useEffect, useRef, useState } from "react";
+import { apiFetch, KnowledgeDocument, KnowledgeStats } from "@/lib/api";
 
 type Props = { onStats: (stats: KnowledgeStats) => void };
 
@@ -19,6 +15,8 @@ type Source = {
   score: number;
 };
 
+const ACTIVE = new Set(["queued", "processing"]);
+
 export function CompanyBrain({ onStats }: Props) {
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [category, setCategory] = useState("general");
@@ -29,6 +27,7 @@ export function CompanyBrain({ onStats }: Props) {
   const [sources, setSources] = useState<Source[]>([]);
   const [answer, setAnswer] = useState("");
   const [busy, setBusy] = useState(false);
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   async function refresh() {
     const [docs, stats] = await Promise.all([
@@ -39,22 +38,31 @@ export function CompanyBrain({ onStats }: Props) {
     onStats(stats);
   }
 
-  useEffect(() => { refresh().catch(console.error); }, []);
+  useEffect(() => {
+    refresh().catch(console.error);
+    timer.current = setInterval(() => refresh().catch(console.error), 2500);
+    return () => {
+      if (timer.current) clearInterval(timer.current);
+    };
+  }, []);
 
   async function upload(event: FormEvent) {
     event.preventDefault();
     if (!file) return;
+
     setBusy(true);
-    setUploadState("Extracting, embedding, and indexing…");
+    setUploadState("Uploading and queueing…");
+
     const form = new FormData();
     form.append("file", file);
     form.append("category", category);
+
     try {
       const result = await apiFetch<KnowledgeDocument>("/knowledge/documents", {
         method: "POST",
         body: form,
       });
-      setUploadState(`Ready — ${result.chunk_count} chunks indexed.`);
+      setUploadState(`Queued: ${result.filename}`);
       setFile(null);
       await refresh();
     } catch (error) {
@@ -62,6 +70,11 @@ export function CompanyBrain({ onStats }: Props) {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function retry(document: KnowledgeDocument) {
+    await apiFetch(`/knowledge/documents/${document.id}/retry`, { method: "POST" });
+    await refresh();
   }
 
   async function remove(document: KnowledgeDocument) {
@@ -80,15 +93,18 @@ export function CompanyBrain({ onStats }: Props) {
 
   async function ask() {
     setAnswer("Generating grounded answer…");
-    const result = await apiFetch<{ answer: string; sources: Source[] }>("/knowledge/ask", {
-      method: "POST",
-      body: JSON.stringify({
-        question,
-        top_k: 5,
-        category: null,
-        assistant: "general",
-      }),
-    });
+    const result = await apiFetch<{ answer: string; sources: Source[] }>(
+      "/knowledge/ask",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          question,
+          top_k: 5,
+          category: null,
+          assistant: "general",
+        }),
+      },
+    );
     setAnswer(result.answer);
     setSources(result.sources);
   }
@@ -96,7 +112,11 @@ export function CompanyBrain({ onStats }: Props) {
   return (
     <section>
       <div className="page-heading">
-        <div><span className="eyebrow">COMPANY BRAIN</span><h1>Knowledge Center</h1><p>Curate, search, and test approved company knowledge.</p></div>
+        <div>
+          <span className="eyebrow">COMPANY BRAIN</span>
+          <h1>Knowledge Center</h1>
+          <p>OCR, index, search, and manage approved company documents.</p>
+        </div>
       </div>
 
       <div className="two-column brain-layout">
@@ -104,44 +124,93 @@ export function CompanyBrain({ onStats }: Props) {
           <h2>Add knowledge</h2>
           <form onSubmit={upload}>
             <label>Category</label>
-            <input value={category} onChange={(event) => setCategory(event.target.value)} />
+            <input value={category} onChange={(e) => setCategory(e.target.value)} />
+
             <label>Document</label>
             <input
               type="file"
               accept=".pdf,.docx,.txt,.md"
-              onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             />
-            <button disabled={busy || !file}>{busy ? "Indexing…" : "Upload and index"}</button>
+
+            <button disabled={busy || !file}>
+              {busy ? "Queueing…" : "Upload and queue"}
+            </button>
+
             {uploadState && <p className="muted">{uploadState}</p>}
           </form>
         </article>
 
         <article className="panel">
           <h2>Knowledge test</h2>
+
           <label>Semantic search</label>
-          <textarea value={query} onChange={(event) => setQuery(event.target.value)} />
+          <textarea value={query} onChange={(e) => setQuery(e.target.value)} />
           <button className="secondary-button" onClick={search}>Search sources</button>
+
           <label>Grounded question</label>
-          <textarea value={question} onChange={(event) => setQuestion(event.target.value)} />
+          <textarea value={question} onChange={(e) => setQuestion(e.target.value)} />
           <button onClick={ask}>Ask Company Brain</button>
         </article>
       </div>
 
-      {answer && <article className="panel answer-panel"><h2>Answer</h2><p>{answer}</p></article>}
+      {answer && (
+        <article className="panel answer-panel">
+          <h2>Answer</h2>
+          <p>{answer}</p>
+        </article>
+      )}
 
       <article className="panel">
         <h2>Indexed documents</h2>
+
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Document</th><th>Category</th><th>Status</th><th>Chunks</th><th /></tr></thead>
+            <thead>
+              <tr>
+                <th>Document</th>
+                <th>Category</th>
+                <th>Stage</th>
+                <th>Progress</th>
+                <th>Pages / OCR</th>
+                <th>Chunks</th>
+                <th />
+              </tr>
+            </thead>
             <tbody>
               {documents.map((document) => (
                 <tr key={document.id}>
-                  <td><b>{document.filename}</b><span>{new Date(document.created_at).toLocaleString()}</span></td>
+                  <td>
+                    <b>{document.filename}</b>
+                    <span>{document.error_message ?? new Date(document.created_at).toLocaleString()}</span>
+                  </td>
                   <td>{document.category}</td>
-                  <td className={document.status === "ready" ? "good" : "bad"}>{document.status}</td>
+                  <td className={document.status === "ready" ? "good" : document.status === "failed" ? "bad" : ""}>
+                    {document.stage}
+                  </td>
+                  <td>
+                    <div className="progress-track">
+                      <div className="progress-fill" style={{ width: `${document.progress_percent}%` }} />
+                    </div>
+                    <span>{document.progress_percent}%</span>
+                  </td>
+                  <td>
+                    {document.pages_processed}/{document.page_count}
+                    <span>{document.ocr_pages} OCR page(s)</span>
+                  </td>
                   <td>{document.chunk_count}</td>
-                  <td><button className="danger-button" onClick={() => remove(document)}>Delete</button></td>
+                  <td>
+                    {document.status === "failed" && (
+                      <button className="secondary-button compact-button" onClick={() => retry(document)}>
+                        Retry
+                      </button>
+                    )}
+                    {!ACTIVE.has(document.status) && (
+                      <button className="danger-button" onClick={() => remove(document)}>
+                        Delete
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -156,7 +225,10 @@ export function CompanyBrain({ onStats }: Props) {
             {sources.map((source, index) => (
               <div className="source-card" key={`${source.document_id}-${source.chunk_index}`}>
                 <b>Source {index + 1}: {source.filename}</b>
-                <span>Score {source.score.toFixed(3)} {source.page_number ? `· page ${source.page_number}` : ""}</span>
+                <span>
+                  Score {source.score.toFixed(3)}
+                  {source.page_number ? ` · page ${source.page_number}` : ""}
+                </span>
                 <p>{source.text}</p>
               </div>
             ))}
