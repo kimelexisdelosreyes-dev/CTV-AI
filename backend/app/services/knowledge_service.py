@@ -16,6 +16,7 @@ from app.schemas.knowledge import KnowledgeSource, KnowledgeStatsResponse
 from app.services.context_engine import context_engine
 from app.services.document_parser import SUPPORTED_EXTENSIONS
 from app.services.embedding_service import embedding_service
+from app.services.intelligence_router import intelligence_router
 from app.services.knowledge_jobs import process_document_job
 from app.services.ollama_service import ollama_service
 from app.services.vector_store import vector_store
@@ -25,12 +26,7 @@ class KnowledgeServiceError(RuntimeError):
     pass
 
 
-async def queue_document(
-    upload: UploadFile,
-    category: str,
-    uploaded_by: str,
-    db: AsyncSession,
-) -> KnowledgeDocument:
+async def queue_document(upload, category, uploaded_by, db):
     original_name = Path(upload.filename or "document").name
     extension = Path(original_name).suffix.lower()
 
@@ -38,7 +34,6 @@ async def queue_document(
         raise KnowledgeServiceError(f"Unsupported file type: {extension}")
 
     content = await upload.read()
-
     if not content:
         raise KnowledgeServiceError("The uploaded document is empty.")
 
@@ -76,15 +71,10 @@ async def queue_document(
     return record
 
 
-async def retry_document(
-    document_id: uuid.UUID,
-    db: AsyncSession,
-) -> KnowledgeDocument:
+async def retry_document(document_id, db):
     record = await db.get(KnowledgeDocument, document_id)
-
     if record is None:
         raise KnowledgeServiceError("Knowledge document not found.")
-
     if record.status in {"queued", "processing"}:
         raise KnowledgeServiceError("Document is already being processed.")
 
@@ -92,33 +82,27 @@ async def retry_document(
     record.stage = "queued"
     record.progress_percent = 0
     record.error_message = None
-
     await db.commit()
     await db.refresh(record)
     asyncio.create_task(process_document_job(record.id))
     return record
 
 
-async def get_document(
-    document_id: uuid.UUID,
-    db: AsyncSession,
-) -> KnowledgeDocument:
+async def get_document(document_id, db):
     record = await db.get(KnowledgeDocument, document_id)
-
     if record is None:
         raise KnowledgeServiceError("Knowledge document not found.")
-
     return record
 
 
-async def list_documents(db: AsyncSession) -> list[KnowledgeDocument]:
+async def list_documents(db):
     result = await db.execute(
         select(KnowledgeDocument).order_by(KnowledgeDocument.created_at.desc())
     )
     return list(result.scalars().all())
 
 
-async def get_stats(db: AsyncSession) -> KnowledgeStatsResponse:
+async def get_stats(db):
     documents = await list_documents(db)
     categories = Counter(item.category for item in documents)
 
@@ -134,22 +118,16 @@ async def get_stats(db: AsyncSession) -> KnowledgeStatsResponse:
     )
 
 
-async def delete_document(
-    document_id: uuid.UUID,
-    db: AsyncSession,
-) -> None:
+async def delete_document(document_id, db):
     record = await db.get(KnowledgeDocument, document_id)
-
     if record is None:
         raise KnowledgeServiceError("Knowledge document not found.")
-
     if record.status in {"queued", "processing"}:
         raise KnowledgeServiceError(
             "Wait for processing to finish before deleting."
         )
 
     await vector_store.delete_document(str(record.id))
-
     path = Path(record.stored_path)
     if path.exists() and path.is_file():
         path.unlink()
@@ -158,34 +136,58 @@ async def delete_document(
     await db.commit()
 
 
-async def search_knowledge(
-    query: str,
-    top_k: int,
-    category: str | None,
-) -> list[KnowledgeSource]:
+async def search_knowledge(query, top_k, category):
     embedding = (await embedding_service.embed([query]))[0]
     return await vector_store.search(embedding, top_k, category)
 
 
+async def _search_routed_collections(question, top_k, collections):
+    if not collections:
+        return []
+
+    merged: list[KnowledgeSource] = []
+    seen: set[tuple[str, int]] = set()
+
+    per_collection = max(2, min(top_k, 4))
+
+    for collection in collections:
+        for source in await search_knowledge(
+            question,
+            per_collection,
+            collection,
+        ):
+            key = (source.document_id, source.chunk_index)
+            if key not in seen:
+                seen.add(key)
+                merged.append(source)
+
+    merged.sort(key=lambda source: source.score, reverse=True)
+    return merged[:top_k]
+
+
 async def answer_with_knowledge(
-    question: str,
-    top_k: int,
-    category: str | None,
-    assistant: str,
-    use_employee_context: bool,
-    current_user: User,
-    db: AsyncSession,
-) -> tuple[str, list[KnowledgeSource], ContextMetadata]:
-    sources = await search_knowledge(question, top_k, category)
+    question,
+    top_k,
+    category,
+    assistant,
+    use_employee_context,
+    current_user,
+    db,
+):
+    route = intelligence_router.route(question)
 
-    if not sources:
-        return (
-            "I could not find relevant approved company knowledge.",
-            [],
-            ContextMetadata(applied=False),
-        )
+    if category:
+        routed_collections = [category]
+    else:
+        routed_collections = route.collections
 
-    approved_context = []
+    sources = await _search_routed_collections(
+        question,
+        top_k,
+        routed_collections,
+    )
+
+    approved_context: list[str] = []
 
     for index, source in enumerate(sources, 1):
         page = f", page {source.page_number}" if source.page_number else ""
@@ -193,36 +195,61 @@ async def answer_with_knowledge(
             f"[Source {index}] {source.filename}{page}\n{source.text}"
         )
 
+    personalization = ContextMetadata(
+        routed_intent=route.intent,
+        routing_confidence=route.confidence,
+        routed_collections=routed_collections,
+        intelligence_sources=route.sources,
+    )
+    assembled_context = ""
+
+    if use_employee_context:
+        bundle = await context_engine.build_employee_context(
+            db,
+            current_user,
+            question=question,
+            route=route,
+        )
+        assembled_context = f"\n\n{bundle.system_context}"
+        personalization = bundle.metadata
+
+    if not sources and not personalization.operational_context_applied:
+        return (
+            "I could not find relevant approved company knowledge for this request.",
+            [],
+            personalization,
+        )
+
+    knowledge_text = (
+        "\n\n".join(approved_context)
+        if approved_context
+        else "No Knowledge Center documents were selected for this routed request."
+    )
+
     base_prompt = ASSISTANT_PROMPTS.get(
         assistant,
         ASSISTANT_PROMPTS["general"],
     ).strip()
-
-    personalization = ContextMetadata(applied=False)
-    employee_context = ""
-
-    if use_employee_context:
-        bundle = await context_engine.build_employee_context(db, current_user)
-        employee_context = f"\n\n{bundle.system_context}"
-        personalization = bundle.metadata
 
     messages = [
         {
             "role": "system",
             "content": (
                 f"{base_prompt}\n\n"
-                "Use only the approved company context for factual claims. "
-                "If evidence is insufficient, say so. "
-                "Cite [Source 1], [Source 2], and so on."
-                f"{employee_context}"
+                f"Routed intent: {route.intent}. "
+                f"Routing confidence: {route.confidence:.2f}. "
+                "Use only the routed sources supplied below. "
+                "Cite documents as [Source 1], [Source 2], and so on. "
+                "Cite monday.com records as [Monday Task 1], [Monday Task 2], and so on. "
+                "If the routed evidence is insufficient, say so."
+                f"{assembled_context}"
             ),
         },
         {
             "role": "user",
             "content": (
                 f"Question:\n{question}\n\n"
-                "Approved company context:\n\n"
-                + "\n\n".join(approved_context)
+                f"Routed Knowledge Center context:\n\n{knowledge_text}"
             ),
         },
     ]

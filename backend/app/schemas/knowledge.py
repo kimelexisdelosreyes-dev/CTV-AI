@@ -7,6 +7,14 @@ from pydantic import BaseModel, Field
 from app.schemas.context import ContextMetadata
 
 
+class KnowledgeCollectionPublic(BaseModel):
+    slug: str
+    name: str
+    description: str
+    icon: str
+    employee_visible: bool
+
+
 class KnowledgeDocumentPublic(BaseModel):
     id: UUID
     filename: str
@@ -25,6 +33,7 @@ class KnowledgeDocumentPublic(BaseModel):
     completed_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
     model_config = {"from_attributes": True}
 
 
@@ -41,6 +50,7 @@ class KnowledgeSearchRequest(BaseModel):
     query: str = Field(min_length=2, max_length=10000)
     top_k: int = Field(default=5, ge=1, le=20)
     category: str | None = Field(default=None, max_length=100)
+    collection: str | None = Field(default=None, max_length=100)
 
 
 class KnowledgeSource(BaseModel):
@@ -62,6 +72,7 @@ class KnowledgeAskRequest(BaseModel):
     question: str = Field(min_length=2, max_length=10000)
     top_k: int = Field(default=5, ge=1, le=12)
     category: str | None = Field(default=None, max_length=100)
+    collection: str | None = Field(default=None, max_length=100)
     assistant: Literal[
         "general",
         "production",

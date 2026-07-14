@@ -13,11 +13,17 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user
+from app.core.knowledge_collections import (
+    KNOWLEDGE_COLLECTIONS,
+    collection_slugs,
+    normalize_collection,
+)
 from app.db.models.user import User, UserRole
 from app.db.session import get_db
 from app.schemas.knowledge import (
     KnowledgeAskRequest,
     KnowledgeAskResponse,
+    KnowledgeCollectionPublic,
     KnowledgeDocumentPublic,
     KnowledgeSearchRequest,
     KnowledgeSearchResponse,
@@ -46,6 +52,40 @@ def require_editor(user: User) -> None:
         )
 
 
+def resolved_collection(
+    collection: str | None,
+    category: str | None,
+) -> str | None:
+    value = normalize_collection(collection or category)
+
+    if value is not None and value not in collection_slugs():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown knowledge collection: {value}",
+        )
+
+    return value
+
+
+@router.get(
+    "/collections",
+    response_model=list[KnowledgeCollectionPublic],
+)
+async def collections(
+    _: User = Depends(get_current_user),
+):
+    return [
+        KnowledgeCollectionPublic(
+            slug=item.slug,
+            name=item.name,
+            description=item.description,
+            icon=item.icon,
+            employee_visible=item.employee_visible,
+        )
+        for item in KNOWLEDGE_COLLECTIONS
+    ]
+
+
 @router.post("/documents", response_model=KnowledgeDocumentPublic)
 async def upload_document(
     file: UploadFile = File(...),
@@ -54,11 +94,12 @@ async def upload_document(
     db: AsyncSession = Depends(get_db),
 ):
     require_editor(current_user)
+    selected = resolved_collection(category, None) or "general"
 
     try:
         return await queue_document(
             file,
-            category,
+            selected,
             current_user.email,
             db,
         )
@@ -138,11 +179,16 @@ async def search(
     request: KnowledgeSearchRequest,
     _: User = Depends(get_current_user),
 ):
+    selected = resolved_collection(
+        request.collection,
+        request.category,
+    )
     sources = await search_knowledge(
         request.query,
         request.top_k,
-        request.category,
+        selected,
     )
+
     return KnowledgeSearchResponse(
         query=request.query,
         sources=sources,
@@ -155,10 +201,15 @@ async def ask(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    selected = resolved_collection(
+        request.collection,
+        request.category,
+    )
+
     answer, sources, personalization = await answer_with_knowledge(
         question=request.question,
         top_k=request.top_k,
-        category=request.category,
+        category=selected,
         assistant=request.assistant,
         use_employee_context=request.use_employee_context,
         current_user=current_user,

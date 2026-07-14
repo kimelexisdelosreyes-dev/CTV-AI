@@ -3,15 +3,22 @@
 import {
   Bot,
   Brain,
+  BookOpen,
   Gauge,
   LayoutDashboard,
-  Library,
   LogOut,
   Settings,
   Users,
+  Workflow,
 } from "lucide-react";
 
-export type Section = "overview" | "brain" | "assistants" | "infrastructure";
+export type Section =
+  | "overview"
+  | "assistants"
+  | "brain"
+  | "knowledge"
+  | "operations"
+  | "infrastructure";
 
 type Props = {
   active: Section;
@@ -23,6 +30,8 @@ const items = [
   { id: "overview" as const, label: "Overview", icon: LayoutDashboard },
   { id: "assistants" as const, label: "AI Assistants", icon: Bot },
   { id: "brain" as const, label: "Company Brain", icon: Brain },
+  { id: "knowledge" as const, label: "Knowledge Center", icon: BookOpen },
+  { id: "operations" as const, label: "Operations", icon: Workflow },
   { id: "infrastructure" as const, label: "Infrastructure", icon: Gauge },
 ];
 
@@ -53,8 +62,7 @@ export function Sidebar({ active, onChange, onLogout }: Props) {
       <div className="sidebar-spacer" />
 
       <div className="future-nav">
-        <span><Library size={15} /> Multimedia</span>
-        <span><Users size={15} /> Users</span>
+        <span><Users size={15} /> Employees</span>
         <span><Settings size={15} /> Settings</span>
       </div>
 

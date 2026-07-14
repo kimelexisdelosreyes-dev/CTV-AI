@@ -1,3 +1,5 @@
+@import "./operations-workspace.css";
+@import "./knowledge-center.css";
 :root {
   --bg: #090b0e;
   --panel: #12161b;

@@ -1,9 +1,17 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
-import { apiFetch, KnowledgeDocument, KnowledgeStats } from "@/lib/api";
+import { useEffect, useState } from "react";
+import { apiFetch, KnowledgeStats } from "@/lib/api";
 
 type Props = { onStats: (stats: KnowledgeStats) => void };
+
+type Collection = {
+  slug: string;
+  name: string;
+  description: string;
+  icon: string;
+  employee_visible: boolean;
+};
 
 type Source = {
   document_id: string;
@@ -25,123 +33,46 @@ type Personalization = {
   skills_used: string[];
   tools_used: string[];
   memories_used: number;
+  operational_context_applied: boolean;
+  operational_tasks_used: number;
+  operational_boards_used: number;
+  operational_summary: string | null;
+  routed_intent: string;
+  routing_confidence: number;
+  routed_collections: string[];
+  intelligence_sources: string[];
 };
 
-const ACTIVE = new Set(["queued", "processing"]);
-
 export function CompanyBrain({ onStats }: Props) {
-  const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
-  const [category, setCategory] = useState("general");
-  const [file, setFile] = useState<File | null>(null);
-  const [uploadState, setUploadState] = useState("");
-  const [query, setQuery] = useState("");
+  const [collections, setCollections] = useState<Collection[]>([]);
+  const [collection, setCollection] = useState("auto");
   const [question, setQuestion] = useState("");
   const [sources, setSources] = useState<Source[]>([]);
   const [answer, setAnswer] = useState("");
-  const [busy, setBusy] = useState(false);
   const [askBusy, setAskBusy] = useState(false);
   const [askError, setAskError] = useState("");
   const [useEmployeeContext, setUseEmployeeContext] = useState(true);
   const [personalization, setPersonalization] =
     useState<Personalization | null>(null);
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  async function refresh() {
-    const [docs, stats] = await Promise.all([
-      apiFetch<KnowledgeDocument[]>("/knowledge/documents"),
-      apiFetch<KnowledgeStats>("/knowledge/stats"),
-    ]);
-
-    setDocuments(docs);
-    onStats(stats);
-  }
 
   useEffect(() => {
-    refresh().catch(console.error);
-
-    timer.current = setInterval(
-      () => refresh().catch(console.error),
-      2500,
-    );
-
-    return () => {
-      if (timer.current) clearInterval(timer.current);
-    };
+    Promise.all([
+      apiFetch<Collection[]>("/knowledge/collections"),
+      apiFetch<KnowledgeStats>("/knowledge/stats"),
+    ])
+      .then(([items, stats]) => {
+        setCollections(items);
+        onStats(stats);
+      })
+      .catch(console.error);
   }, []);
-
-  async function upload(event: FormEvent) {
-    event.preventDefault();
-    if (!file) return;
-
-    setBusy(true);
-    setUploadState("Uploading and queueing…");
-
-    const form = new FormData();
-    form.append("file", file);
-    form.append("category", category);
-
-    try {
-      const result = await apiFetch<KnowledgeDocument>(
-        "/knowledge/documents",
-        {
-          method: "POST",
-          body: form,
-        },
-      );
-
-      setUploadState(`Queued: ${result.filename}`);
-      setFile(null);
-      await refresh();
-    } catch (error) {
-      setUploadState(
-        error instanceof Error ? error.message : "Upload failed.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function retry(document: KnowledgeDocument) {
-    await apiFetch(`/knowledge/documents/${document.id}/retry`, {
-      method: "POST",
-    });
-    await refresh();
-  }
-
-  async function remove(document: KnowledgeDocument) {
-    if (!confirm(`Delete ${document.filename} from all knowledge storage?`)) {
-      return;
-    }
-
-    await apiFetch(`/knowledge/documents/${document.id}`, {
-      method: "DELETE",
-    });
-
-    await refresh();
-  }
-
-  async function search() {
-    const result = await apiFetch<{ sources: Source[] }>(
-      "/knowledge/search",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          query,
-          top_k: 5,
-          category: null,
-        }),
-      },
-    );
-
-    setSources(result.sources);
-  }
 
   async function ask() {
     if (askBusy || !question.trim()) return;
 
     setAskBusy(true);
     setAskError("");
-    setAnswer("Generating grounded answer…");
+    setAnswer("Generating routed answer…");
     setPersonalization(null);
 
     try {
@@ -153,8 +84,8 @@ export function CompanyBrain({ onStats }: Props) {
         method: "POST",
         body: JSON.stringify({
           question: question.trim(),
-          top_k: 3,
-          category: null,
+          top_k: 5,
+          collection: collection === "auto" ? null : collection,
           assistant: "general",
           use_employee_context: useEmployeeContext,
         }),
@@ -164,13 +95,12 @@ export function CompanyBrain({ onStats }: Props) {
       setSources(result.sources);
       setPersonalization(result.personalization);
     } catch (error) {
-      const message =
+      setAnswer("");
+      setAskError(
         error instanceof Error
           ? error.message
-          : "Company Brain request failed.";
-
-      setAnswer("");
-      setAskError(message);
+          : "Company Brain request failed.",
+      );
     } finally {
       setAskBusy(false);
     }
@@ -180,201 +110,96 @@ export function CompanyBrain({ onStats }: Props) {
     <section>
       <div className="page-heading">
         <div>
-          <span className="eyebrow">COMPANY BRAIN</span>
-          <h1>Knowledge Center</h1>
+          <span className="eyebrow">ROUTED ENTERPRISE INTELLIGENCE</span>
+          <h1>Company Brain</h1>
           <p>
-            OCR, index, search, and answer using approved company knowledge.
+            CTV ONE chooses the right knowledge and operational sources before
+            generating an answer.
           </p>
         </div>
       </div>
 
-      <div className="two-column brain-layout">
-        <article className="panel">
-          <h2>Add knowledge</h2>
+      <article className="panel company-brain-chat">
+        <label>Knowledge routing</label>
+        <select
+          value={collection}
+          onChange={(event) => setCollection(event.target.value)}
+        >
+          <option value="auto">Automatic Intelligence Routing</option>
+          {collections.map((item) => (
+            <option key={item.slug} value={item.slug}>
+              Force: {item.name}
+            </option>
+          ))}
+        </select>
 
-          <form onSubmit={upload}>
-            <label>Category</label>
-            <input
-              value={category}
-              onChange={(event) => setCategory(event.target.value)}
-            />
+        <label>Question</label>
+        <textarea
+          value={question}
+          onChange={(event) => setQuestion(event.target.value)}
+          placeholder="Ask about policies, manuals, SOPs, tasks, deadlines, boards, or priorities…"
+        />
 
-            <label>Document</label>
-            <input
-              type="file"
-              accept=".pdf,.docx,.txt,.md"
-              onChange={(event) =>
-                setFile(event.target.files?.[0] ?? null)
-              }
-            />
-
-            <button disabled={busy || !file}>
-              {busy ? "Queueing…" : "Upload and queue"}
-            </button>
-
-            {uploadState && <p className="muted">{uploadState}</p>}
-          </form>
-        </article>
-
-        <article className="panel">
-          <h2>Knowledge test</h2>
-
-          <label>Semantic search</label>
-          <textarea
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
+        <label className="context-toggle">
+          <input
+            type="checkbox"
+            checked={useEmployeeContext}
+            onChange={(event) =>
+              setUseEmployeeContext(event.target.checked)
+            }
           />
-          <button className="secondary-button" onClick={search}>
-            Search sources
-          </button>
+          Use employee context
+        </label>
 
-          <label>Grounded question</label>
-          <textarea
-            value={question}
-            onChange={(event) => setQuestion(event.target.value)}
-          />
+        <button
+          onClick={ask}
+          disabled={askBusy || !question.trim()}
+        >
+          {askBusy ? "Routing and generating…" : "Ask Company Brain"}
+        </button>
 
-          <label className="context-toggle">
-            <input
-              type="checkbox"
-              checked={useEmployeeContext}
-              onChange={(event) =>
-                setUseEmployeeContext(event.target.checked)
-              }
-            />
-            Personalize using my employee context
-          </label>
-
-          <button
-            onClick={ask}
-            disabled={askBusy || !question.trim()}
-          >
-            {askBusy ? "Generating…" : "Ask Company Brain"}
-          </button>
-
-          {askError && <p className="error">{askError}</p>}
-        </article>
-      </div>
+        {askError && <p className="error">{askError}</p>}
+      </article>
 
       {answer && (
         <article className="panel answer-panel">
           <h2>Answer</h2>
           <p>{answer}</p>
 
-          {personalization?.applied && (
+          {personalization && (
             <div className="personalization-card">
-              <b>Personalized response</b>
+              <b>Intelligence Used</b>
               <span>
-                {personalization.job_title || "Employee"} ·{" "}
-                {personalization.response_style} ·{" "}
-                {personalization.detail_level}
+                Intent: {personalization.routed_intent} · Confidence:{" "}
+                {Math.round(personalization.routing_confidence * 100)}%
               </span>
               <span>
-                {personalization.skills_used.length} skill(s),{" "}
-                {personalization.tools_used.length} tool(s),{" "}
-                {personalization.memories_used} confirmed memory item(s)
+                Sources:{" "}
+                {personalization.intelligence_sources.join(", ") || "none"}
               </span>
-            </div>
-          )}
+              <span>
+                Collections:{" "}
+                {personalization.routed_collections.join(", ") || "none"}
+              </span>
 
-          {personalization && !personalization.applied && (
-            <p className="muted">
-              Employee personalization was not applied.
-            </p>
+              {personalization.operational_context_applied && (
+                <span>
+                  monday.com · {personalization.operational_tasks_used} task(s) ·{" "}
+                  {personalization.operational_boards_used} board(s)
+                </span>
+              )}
+
+              {personalization.operational_summary && (
+                <span>{personalization.operational_summary}</span>
+              )}
+            </div>
           )}
         </article>
       )}
 
-      <article className="panel">
-        <h2>Indexed documents</h2>
-
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Document</th>
-                <th>Category</th>
-                <th>Stage</th>
-                <th>Progress</th>
-                <th>Pages / OCR</th>
-                <th>Chunks</th>
-                <th />
-              </tr>
-            </thead>
-
-            <tbody>
-              {documents.map((document) => (
-                <tr key={document.id}>
-                  <td>
-                    <b>{document.filename}</b>
-                    <span>
-                      {document.error_message ??
-                        new Date(document.created_at).toLocaleString()}
-                    </span>
-                  </td>
-
-                  <td>{document.category}</td>
-
-                  <td
-                    className={
-                      document.status === "ready"
-                        ? "good"
-                        : document.status === "failed"
-                          ? "bad"
-                          : ""
-                    }
-                  >
-                    {document.stage}
-                  </td>
-
-                  <td>
-                    <div className="progress-track">
-                      <div
-                        className="progress-fill"
-                        style={{
-                          width: `${document.progress_percent}%`,
-                        }}
-                      />
-                    </div>
-                    <span>{document.progress_percent}%</span>
-                  </td>
-
-                  <td>
-                    {document.pages_processed}/{document.page_count}
-                    <span>{document.ocr_pages} OCR page(s)</span>
-                  </td>
-
-                  <td>{document.chunk_count}</td>
-
-                  <td>
-                    {document.status === "failed" && (
-                      <button
-                        className="secondary-button compact-button"
-                        onClick={() => retry(document)}
-                      >
-                        Retry
-                      </button>
-                    )}
-
-                    {!ACTIVE.has(document.status) && (
-                      <button
-                        className="danger-button"
-                        onClick={() => remove(document)}
-                      >
-                        Delete
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </article>
-
       {sources.length > 0 && (
         <article className="panel">
-          <h2>Retrieved sources</h2>
+          <h2>Document Sources</h2>
 
           <div className="source-list">
             {sources.map((source, index) => (
@@ -386,7 +211,7 @@ export function CompanyBrain({ onStats }: Props) {
                   Source {index + 1}: {source.filename}
                 </b>
                 <span>
-                  Score {source.score.toFixed(3)}
+                  {source.category} · score {source.score.toFixed(3)}
                   {source.page_number
                     ? ` · page ${source.page_number}`
                     : ""}
