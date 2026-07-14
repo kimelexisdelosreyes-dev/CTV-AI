@@ -15,6 +15,18 @@ type Source = {
   score: number;
 };
 
+type Personalization = {
+  applied: boolean;
+  job_title: string | null;
+  experience_level: string | null;
+  preferred_language: string | null;
+  response_style: string | null;
+  detail_level: string | null;
+  skills_used: string[];
+  tools_used: string[];
+  memories_used: number;
+};
+
 const ACTIVE = new Set(["queued", "processing"]);
 
 export function CompanyBrain({ onStats }: Props) {
@@ -27,22 +39,31 @@ export function CompanyBrain({ onStats }: Props) {
   const [sources, setSources] = useState<Source[]>([]);
   const [answer, setAnswer] = useState("");
   const [busy, setBusy] = useState(false);
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const [askBusy, setAskBusy] = useState(false);
   const [askError, setAskError] = useState("");
+  const [useEmployeeContext, setUseEmployeeContext] = useState(true);
+  const [personalization, setPersonalization] =
+    useState<Personalization | null>(null);
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   async function refresh() {
     const [docs, stats] = await Promise.all([
       apiFetch<KnowledgeDocument[]>("/knowledge/documents"),
       apiFetch<KnowledgeStats>("/knowledge/stats"),
     ]);
+
     setDocuments(docs);
     onStats(stats);
   }
 
   useEffect(() => {
     refresh().catch(console.error);
-    timer.current = setInterval(() => refresh().catch(console.error), 2500);
+
+    timer.current = setInterval(
+      () => refresh().catch(console.error),
+      2500,
+    );
+
     return () => {
       if (timer.current) clearInterval(timer.current);
     };
@@ -60,72 +81,100 @@ export function CompanyBrain({ onStats }: Props) {
     form.append("category", category);
 
     try {
-      const result = await apiFetch<KnowledgeDocument>("/knowledge/documents", {
-        method: "POST",
-        body: form,
-      });
+      const result = await apiFetch<KnowledgeDocument>(
+        "/knowledge/documents",
+        {
+          method: "POST",
+          body: form,
+        },
+      );
+
       setUploadState(`Queued: ${result.filename}`);
       setFile(null);
       await refresh();
     } catch (error) {
-      setUploadState(error instanceof Error ? error.message : "Upload failed.");
+      setUploadState(
+        error instanceof Error ? error.message : "Upload failed.",
+      );
     } finally {
       setBusy(false);
     }
   }
 
   async function retry(document: KnowledgeDocument) {
-    await apiFetch(`/knowledge/documents/${document.id}/retry`, { method: "POST" });
+    await apiFetch(`/knowledge/documents/${document.id}/retry`, {
+      method: "POST",
+    });
     await refresh();
   }
 
   async function remove(document: KnowledgeDocument) {
-    if (!confirm(`Delete ${document.filename} from all knowledge storage?`)) return;
-    await apiFetch(`/knowledge/documents/${document.id}`, { method: "DELETE" });
+    if (!confirm(`Delete ${document.filename} from all knowledge storage?`)) {
+      return;
+    }
+
+    await apiFetch(`/knowledge/documents/${document.id}`, {
+      method: "DELETE",
+    });
+
     await refresh();
   }
 
   async function search() {
-    const result = await apiFetch<{ sources: Source[] }>("/knowledge/search", {
-      method: "POST",
-      body: JSON.stringify({ query, top_k: 5, category: null }),
-    });
+    const result = await apiFetch<{ sources: Source[] }>(
+      "/knowledge/search",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          query,
+          top_k: 5,
+          category: null,
+        }),
+      },
+    );
+
     setSources(result.sources);
   }
 
   async function ask() {
-  if (askBusy || !question.trim()) return;
+    if (askBusy || !question.trim()) return;
 
-  setAskBusy(true);
-  setAskError("");
-  setAnswer("Generating grounded answer…");
+    setAskBusy(true);
+    setAskError("");
+    setAnswer("Generating grounded answer…");
+    setPersonalization(null);
 
-  try {
-    const result = await apiFetch<{
-      answer: string;
-      sources: Source[];
-    }>("/knowledge/ask", {
-      method: "POST",
-      body: JSON.stringify({
-        question: question.trim(),
-        top_k: 3,
-        category: null,
-        assistant: "general",
-      }),
-    });
+    try {
+      const result = await apiFetch<{
+        answer: string;
+        sources: Source[];
+        personalization: Personalization;
+      }>("/knowledge/ask", {
+        method: "POST",
+        body: JSON.stringify({
+          question: question.trim(),
+          top_k: 3,
+          category: null,
+          assistant: "general",
+          use_employee_context: useEmployeeContext,
+        }),
+      });
 
-    setAnswer(result.answer);
-    setSources(result.sources);
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Company Brain request failed.";
+      setAnswer(result.answer);
+      setSources(result.sources);
+      setPersonalization(result.personalization);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Company Brain request failed.";
 
-    setAnswer("");
-    setAskError(message);
-  } finally {
-    setAskBusy(false);
+      setAnswer("");
+      setAskError(message);
+    } finally {
+      setAskBusy(false);
+    }
   }
-}
 
   return (
     <section>
@@ -133,22 +182,30 @@ export function CompanyBrain({ onStats }: Props) {
         <div>
           <span className="eyebrow">COMPANY BRAIN</span>
           <h1>Knowledge Center</h1>
-          <p>OCR, index, search, and manage approved company documents.</p>
+          <p>
+            OCR, index, search, and answer using approved company knowledge.
+          </p>
         </div>
       </div>
 
       <div className="two-column brain-layout">
         <article className="panel">
           <h2>Add knowledge</h2>
+
           <form onSubmit={upload}>
             <label>Category</label>
-            <input value={category} onChange={(e) => setCategory(e.target.value)} />
+            <input
+              value={category}
+              onChange={(event) => setCategory(event.target.value)}
+            />
 
             <label>Document</label>
             <input
               type="file"
               accept=".pdf,.docx,.txt,.md"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              onChange={(event) =>
+                setFile(event.target.files?.[0] ?? null)
+              }
             />
 
             <button disabled={busy || !file}>
@@ -163,16 +220,39 @@ export function CompanyBrain({ onStats }: Props) {
           <h2>Knowledge test</h2>
 
           <label>Semantic search</label>
-          <textarea value={query} onChange={(e) => setQuery(e.target.value)} />
-          <button className="secondary-button" onClick={search}>Search sources</button>
+          <textarea
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          <button className="secondary-button" onClick={search}>
+            Search sources
+          </button>
 
           <label>Grounded question</label>
-          <textarea value={question} onChange={(e) => setQuestion(e.target.value)} />
-          <button onClick={ask} disabled={askBusy || !question.trim()}>
+          <textarea
+            value={question}
+            onChange={(event) => setQuestion(event.target.value)}
+          />
+
+          <label className="context-toggle">
+            <input
+              type="checkbox"
+              checked={useEmployeeContext}
+              onChange={(event) =>
+                setUseEmployeeContext(event.target.checked)
+              }
+            />
+            Personalize using my employee context
+          </label>
+
+          <button
+            onClick={ask}
+            disabled={askBusy || !question.trim()}
+          >
             {askBusy ? "Generating…" : "Ask Company Brain"}
           </button>
 
-{askError && <p className="error">{askError}</p>}
+          {askError && <p className="error">{askError}</p>}
         </article>
       </div>
 
@@ -180,6 +260,28 @@ export function CompanyBrain({ onStats }: Props) {
         <article className="panel answer-panel">
           <h2>Answer</h2>
           <p>{answer}</p>
+
+          {personalization?.applied && (
+            <div className="personalization-card">
+              <b>Personalized response</b>
+              <span>
+                {personalization.job_title || "Employee"} ·{" "}
+                {personalization.response_style} ·{" "}
+                {personalization.detail_level}
+              </span>
+              <span>
+                {personalization.skills_used.length} skill(s),{" "}
+                {personalization.tools_used.length} tool(s),{" "}
+                {personalization.memories_used} confirmed memory item(s)
+              </span>
+            </div>
+          )}
+
+          {personalization && !personalization.applied && (
+            <p className="muted">
+              Employee personalization was not applied.
+            </p>
+          )}
         </article>
       )}
 
@@ -199,36 +301,66 @@ export function CompanyBrain({ onStats }: Props) {
                 <th />
               </tr>
             </thead>
+
             <tbody>
               {documents.map((document) => (
                 <tr key={document.id}>
                   <td>
                     <b>{document.filename}</b>
-                    <span>{document.error_message ?? new Date(document.created_at).toLocaleString()}</span>
+                    <span>
+                      {document.error_message ??
+                        new Date(document.created_at).toLocaleString()}
+                    </span>
                   </td>
+
                   <td>{document.category}</td>
-                  <td className={document.status === "ready" ? "good" : document.status === "failed" ? "bad" : ""}>
+
+                  <td
+                    className={
+                      document.status === "ready"
+                        ? "good"
+                        : document.status === "failed"
+                          ? "bad"
+                          : ""
+                    }
+                  >
                     {document.stage}
                   </td>
+
                   <td>
                     <div className="progress-track">
-                      <div className="progress-fill" style={{ width: `${document.progress_percent}%` }} />
+                      <div
+                        className="progress-fill"
+                        style={{
+                          width: `${document.progress_percent}%`,
+                        }}
+                      />
                     </div>
                     <span>{document.progress_percent}%</span>
                   </td>
+
                   <td>
                     {document.pages_processed}/{document.page_count}
                     <span>{document.ocr_pages} OCR page(s)</span>
                   </td>
+
                   <td>{document.chunk_count}</td>
+
                   <td>
                     {document.status === "failed" && (
-                      <button className="secondary-button compact-button" onClick={() => retry(document)}>
+                      <button
+                        className="secondary-button compact-button"
+                        onClick={() => retry(document)}
+                      >
                         Retry
                       </button>
                     )}
+
                     {!ACTIVE.has(document.status) && (
-                      <button className="danger-button" onClick={() => remove(document)}>
+                      <button
+                        className="danger-button"
+                        onClick={() => remove(document)}
+                      >
                         Delete
                       </button>
                     )}
@@ -243,13 +375,21 @@ export function CompanyBrain({ onStats }: Props) {
       {sources.length > 0 && (
         <article className="panel">
           <h2>Retrieved sources</h2>
+
           <div className="source-list">
             {sources.map((source, index) => (
-              <div className="source-card" key={`${source.document_id}-${source.chunk_index}`}>
-                <b>Source {index + 1}: {source.filename}</b>
+              <div
+                className="source-card"
+                key={`${source.document_id}-${source.chunk_index}`}
+              >
+                <b>
+                  Source {index + 1}: {source.filename}
+                </b>
                 <span>
                   Score {source.score.toFixed(3)}
-                  {source.page_number ? ` · page ${source.page_number}` : ""}
+                  {source.page_number
+                    ? ` · page ${source.page_number}`
+                    : ""}
                 </span>
                 <p>{source.text}</p>
               </div>
