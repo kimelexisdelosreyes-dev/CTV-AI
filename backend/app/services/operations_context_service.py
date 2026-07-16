@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from app.connectors.base import ConnectorError
 from app.connectors.manager import connector_manager
 from app.connectors.models import ConnectorTask
+from app.services.intelligence_router import intelligence_router
 
 
 @dataclass
@@ -40,6 +41,10 @@ def _tokens(value: str) -> set[str]:
         for token in re.findall(r"[a-z0-9]+", value.lower())
         if len(token) >= 3
     }
+
+
+def _question_is_operational(question: str) -> bool:
+    return intelligence_router.route(question).use_operations
 
 
 def _task_score(task: ConnectorTask, question_tokens: set[str], now: datetime) -> float:

@@ -36,6 +36,88 @@ export type KnowledgeStats = {
   categories: Record<string, number>;
 };
 
+export type DeveloperStatus = {
+  enabled: boolean;
+};
+
+export type RoutedCollectionSearchMetric = {
+  collection: string | null;
+  duration_ms: number | null;
+  retrieved_chunk_count: number | null;
+};
+
+export type PerformanceEvent = {
+  timestamp: string | null;
+  outcome: string | null;
+  routed_intent: string | null;
+  routing_confidence: number | null;
+  total_endpoint_ms: number | null;
+  intelligence_router_ms: number | null;
+  employee_context_ms: number | null;
+  monday_operational_context_ms: number | null;
+  embedding_ms: number | null;
+  qdrant_vector_search_ms: number | null;
+  prompt_assembly_ms: number | null;
+  ollama_request_ms: number | null;
+  prompt_character_count: number | null;
+  prompt_size: number | null;
+  estimated_input_token_count: number | null;
+  estimated_output_token_count: number | null;
+  tokens_per_second: number | null;
+  answer_character_count: number | null;
+  collection_count: number | null;
+  retrieved_chunk_count: number | null;
+  operational_task_count: number | null;
+  routed_collection_searches: RoutedCollectionSearchMetric[];
+  model_name: string | null;
+  gpu_utilization: number | null;
+  cpu_utilization: number | null;
+};
+
+export type PerformanceSummary = {
+  request_count: number;
+  success_count: number;
+  failure_count: number;
+  average_total_duration_ms: number;
+  median_total_duration_ms: number;
+  p95_total_duration_ms: number;
+  average_ollama_duration_ms: number;
+  average_monday_duration_ms: number;
+  average_employee_context_duration_ms: number;
+  average_embedding_duration_ms: number;
+  average_qdrant_duration_ms: number;
+  average_estimated_input_tokens: number;
+  average_tokens_per_second: number;
+  slowest_stage: string | null;
+  counts_by_routed_intent: Record<string, number>;
+};
+
+export type DeveloperModels = {
+  default_model: string;
+  available_models: string[];
+};
+
+export type ModelBenchmarkResult = {
+  model_name: string;
+  case_label: string;
+  outcome: string;
+  total_request_ms: number;
+  ollama_request_ms: number;
+  estimated_input_tokens: number;
+  estimated_output_tokens: number;
+  tokens_per_second: number | null;
+  answer_character_count: number;
+  routed_intent: string | null;
+  skipped_no_evidence: boolean;
+  error_category: string | null;
+};
+
+export type ModelBenchmarkResponse = {
+  default_model: string;
+  comparison_model: string;
+  results: ModelBenchmarkResult[];
+};
+
 export function getToken(): string {
   if (typeof window === "undefined") return "";
   return localStorage.getItem("ctv_token") ?? "";

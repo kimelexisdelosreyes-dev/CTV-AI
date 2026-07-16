@@ -1,3 +1,5 @@
+import json
+import logging
 from uuid import UUID
 
 from fastapi import (
@@ -40,8 +42,23 @@ from app.services.knowledge_service import (
     retry_document,
     search_knowledge,
 )
+from app.services.performance_event_store import performance_event_store
+from app.services.performance_instrumentation import AskPerformanceInstrumentation
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
+logger = logging.getLogger(__name__)
+
+
+def log_ask_performance(
+    instrumentation: AskPerformanceInstrumentation,
+    outcome: str,
+) -> None:
+    fields = instrumentation.to_log_fields(outcome)
+    performance_event_store.record(fields)
+    logger.info(
+        "knowledge.ask.performance %s",
+        json.dumps(fields, sort_keys=True),
+    )
 
 
 def require_editor(user: User) -> None:
@@ -201,23 +218,34 @@ async def ask(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    selected = resolved_collection(
-        request.collection,
-        request.category,
-    )
+    instrumentation = AskPerformanceInstrumentation()
 
-    answer, sources, personalization = await answer_with_knowledge(
-        question=request.question,
-        top_k=request.top_k,
-        category=selected,
-        assistant=request.assistant,
-        use_employee_context=request.use_employee_context,
-        current_user=current_user,
-        db=db,
-    )
+    try:
+        with instrumentation.measure("total_endpoint_ms"):
+            selected = resolved_collection(
+                request.collection,
+                request.category,
+            )
 
-    return KnowledgeAskResponse(
-        answer=answer,
-        sources=sources,
-        personalization=personalization,
-    )
+            answer, sources, personalization = await answer_with_knowledge(
+                question=request.question,
+                top_k=request.top_k,
+                category=selected,
+                assistant=request.assistant,
+                use_employee_context=request.use_employee_context,
+                current_user=current_user,
+                db=db,
+                instrumentation=instrumentation,
+            )
+
+            response = KnowledgeAskResponse(
+                answer=answer,
+                sources=sources,
+                personalization=personalization,
+            )
+    except Exception:
+        log_ask_performance(instrumentation, "error")
+        raise
+
+    log_ask_performance(instrumentation, "success")
+    return response

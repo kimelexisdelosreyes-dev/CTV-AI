@@ -1,6 +1,7 @@
 import asyncio
 import uuid
 from collections import Counter
+from contextlib import nullcontext
 from pathlib import Path
 
 from fastapi import UploadFile
@@ -19,6 +20,7 @@ from app.services.embedding_service import embedding_service
 from app.services.intelligence_router import intelligence_router
 from app.services.knowledge_jobs import process_document_job
 from app.services.ollama_service import ollama_service
+from app.services.performance_instrumentation import AskPerformanceInstrumentation
 from app.services.vector_store import vector_store
 
 
@@ -136,12 +138,35 @@ async def delete_document(document_id, db):
     await db.commit()
 
 
-async def search_knowledge(query, top_k, category):
-    embedding = (await embedding_service.embed([query]))[0]
-    return await vector_store.search(embedding, top_k, category)
+async def search_knowledge(
+    query,
+    top_k,
+    category,
+    instrumentation: AskPerformanceInstrumentation | None = None,
+):
+    embedding_timer = (
+        instrumentation.measure("embedding_ms")
+        if instrumentation
+        else nullcontext()
+    )
+    with embedding_timer:
+        embedding = (await embedding_service.embed([query]))[0]
+
+    search_timer = (
+        instrumentation.measure("qdrant_vector_search_ms")
+        if instrumentation
+        else nullcontext()
+    )
+    with search_timer:
+        return await vector_store.search(embedding, top_k, category)
 
 
-async def _search_routed_collections(question, top_k, collections):
+async def _search_routed_collections(
+    question,
+    top_k,
+    collections,
+    instrumentation: AskPerformanceInstrumentation | None = None,
+):
     if not collections:
         return []
 
@@ -151,11 +176,21 @@ async def _search_routed_collections(question, top_k, collections):
     per_collection = max(2, min(top_k, 4))
 
     for collection in collections:
-        for source in await search_knowledge(
+        started_at = instrumentation.clock() if instrumentation else 0.0
+        collection_sources = await search_knowledge(
             question,
             per_collection,
             collection,
-        ):
+            instrumentation,
+        )
+        if instrumentation:
+            instrumentation.record_collection_search(
+                collection,
+                instrumentation.clock() - started_at,
+                len(collection_sources),
+            )
+
+        for source in collection_sources:
             key = (source.document_id, source.chunk_index)
             if key not in seen:
                 seen.add(key)
@@ -173,19 +208,37 @@ async def answer_with_knowledge(
     use_employee_context,
     current_user,
     db,
+    instrumentation: AskPerformanceInstrumentation | None = None,
+    model_override: str | None = None,
 ):
-    route = intelligence_router.route(question)
+    router_timer = (
+        instrumentation.measure("intelligence_router_ms")
+        if instrumentation
+        else nullcontext()
+    )
+    with router_timer:
+        route = intelligence_router.route(question)
 
     if category:
         routed_collections = [category]
     else:
         routed_collections = route.collections
 
+    if instrumentation:
+        instrumentation.record_route(
+            route.intent,
+            route.confidence,
+            routed_collections,
+        )
+
     sources = await _search_routed_collections(
         question,
         top_k,
         routed_collections,
+        instrumentation,
     )
+    if instrumentation:
+        instrumentation.retrieved_chunk_count = len(sources)
 
     approved_context: list[str] = []
 
@@ -204,55 +257,91 @@ async def answer_with_knowledge(
     assembled_context = ""
 
     if use_employee_context:
-        bundle = await context_engine.build_employee_context(
-            db,
-            current_user,
-            question=question,
-            route=route,
+        employee_context_timer = (
+            instrumentation.measure("employee_context_ms")
+            if instrumentation
+            else nullcontext()
         )
+        with employee_context_timer:
+            bundle = await context_engine.build_employee_context(
+                db,
+                current_user,
+                question=question,
+                route=route,
+                instrumentation=instrumentation,
+            )
         assembled_context = f"\n\n{bundle.system_context}"
         personalization = bundle.metadata
+        if instrumentation:
+            instrumentation.operational_task_count = (
+                personalization.operational_tasks_used
+            )
 
     if not sources and not personalization.operational_context_applied:
+        fallback_answer = (
+            "I could not find relevant approved company knowledge for this request."
+        )
+        if instrumentation:
+            instrumentation.record_answer(fallback_answer)
         return (
-            "I could not find relevant approved company knowledge for this request.",
+            fallback_answer,
             [],
             personalization,
         )
 
-    knowledge_text = (
-        "\n\n".join(approved_context)
-        if approved_context
-        else "No Knowledge Center documents were selected for this routed request."
+    prompt_timer = (
+        instrumentation.measure("prompt_assembly_ms")
+        if instrumentation
+        else nullcontext()
     )
+    with prompt_timer:
+        knowledge_text = (
+            "\n\n".join(approved_context)
+            if approved_context
+            else "No Knowledge Center documents were selected for this routed request."
+        )
 
-    base_prompt = ASSISTANT_PROMPTS.get(
-        assistant,
-        ASSISTANT_PROMPTS["general"],
-    ).strip()
+        base_prompt = ASSISTANT_PROMPTS.get(
+            assistant,
+            ASSISTANT_PROMPTS["general"],
+        ).strip()
 
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                f"{base_prompt}\n\n"
-                f"Routed intent: {route.intent}. "
-                f"Routing confidence: {route.confidence:.2f}. "
-                "Use only the routed sources supplied below. "
-                "Cite documents as [Source 1], [Source 2], and so on. "
-                "Cite monday.com records as [Monday Task 1], [Monday Task 2], and so on. "
-                "If the routed evidence is insufficient, say so."
-                f"{assembled_context}"
-            ),
-        },
-        {
-            "role": "user",
-            "content": (
-                f"Question:\n{question}\n\n"
-                f"Routed Knowledge Center context:\n\n{knowledge_text}"
-            ),
-        },
-    ]
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    f"{base_prompt}\n\n"
+                    f"Routed intent: {route.intent}. "
+                    f"Routing confidence: {route.confidence:.2f}. "
+                    "Use only the routed sources supplied below. "
+                    "Cite documents as [Source 1], [Source 2], and so on. "
+                    "Cite monday.com records as [Monday Task 1], [Monday Task 2], and so on. "
+                    "If the routed evidence is insufficient, say so."
+                    f"{assembled_context}"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Question:\n{question}\n\n"
+                    f"Routed Knowledge Center context:\n\n{knowledge_text}"
+                ),
+            },
+        ]
+        if instrumentation:
+            instrumentation.record_prompt(messages)
 
-    answer = await ollama_service.chat(messages)
+    ollama_timer = (
+        instrumentation.measure("ollama_request_ms")
+        if instrumentation
+        else nullcontext()
+    )
+    with ollama_timer:
+        if instrumentation:
+            instrumentation.model_name = model_override or settings.ollama_model
+        answer = await ollama_service.chat(messages, model=model_override)
+
+    if instrumentation:
+        instrumentation.record_answer(answer)
+
     return answer, sources, personalization

@@ -9,6 +9,7 @@ from app.schemas.context import ContextBundle, ContextMetadata
 from app.services import employee_service
 from app.services.intelligence_router import RouteDecision
 from app.services.operations_context_service import operations_context_service
+from app.services.performance_instrumentation import AskPerformanceInstrumentation
 
 
 class ContextEngine:
@@ -18,6 +19,7 @@ class ContextEngine:
         user: User,
         question: str | None = None,
         route: RouteDecision | None = None,
+        instrumentation: AskPerformanceInstrumentation | None = None,
     ) -> ContextBundle:
         profile = await employee_service.ensure_profile(db, user)
         preferences = await employee_service.ensure_preferences(db, user)
@@ -52,10 +54,17 @@ class ContextEngine:
             if descriptor.enabled
         ]
 
-        operations = await operations_context_service.build(
-            question or "",
-            force=bool(route and route.use_operations),
-        )
+        if instrumentation:
+            with instrumentation.measure("monday_operational_context_ms"):
+                operations = await operations_context_service.build(
+                    question or "",
+                    force=bool(route and route.use_operations),
+                )
+        else:
+            operations = await operations_context_service.build(
+                question or "",
+                force=bool(route and route.use_operations),
+            )
 
         employee_context = f"""
 EMPLOYEE CONTEXT

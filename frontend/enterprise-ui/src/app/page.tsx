@@ -86,7 +86,7 @@ export default function Home() {
         {active === "operations" && <OperationsWorkspace />}
 
         {active === "infrastructure" && (
-          <Infrastructure data={infrastructure} />
+          <Infrastructure data={infrastructure} user={user} />
         )}
       </main>
     </div>
