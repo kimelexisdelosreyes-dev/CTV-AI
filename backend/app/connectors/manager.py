@@ -77,6 +77,11 @@ class ConnectorManager:
 
         return list(await connector.get_projects())
 
+    def task_fetch_diagnostics(self, name: str) -> dict[str, object]:
+        connector = connector_registry.get(name)
+        value = getattr(connector, "last_task_fetch_diagnostics", {})
+        return dict(value) if isinstance(value, dict) else {}
+
     async def search(
         self,
         name: str,

@@ -32,6 +32,7 @@ class MondayConnector(BaseConnector):
     def __init__(self, config: MondaySettings | None = None) -> None:
         self.config = config or MondaySettings.from_env()
         self.enabled = self.config.configured
+        self.last_task_fetch_diagnostics: dict[str, object] = {}
 
     async def _graphql(self, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
         if not self.config.configured:
@@ -143,7 +144,10 @@ class MondayConnector(BaseConnector):
             for board in data.get("boards") or []
         ]
 
-    async def _items(self, board_id: str) -> list[dict[str, Any]]:
+    async def _items(
+        self,
+        board_id: str,
+    ) -> tuple[list[dict[str, Any]], dict[str, object]]:
         query = '''
         query ($ids: [ID!], $limit: Int!, $cursor: String) {
           boards(ids: $ids) {
@@ -164,8 +168,15 @@ class MondayConnector(BaseConnector):
         '''
         cursor = None
         results: list[dict[str, Any]] = []
+        seen_cursors: set[str] = set()
+        groups: set[str] = set()
+        pages = 0
+        board_returned = False
 
         while True:
+            pages += 1
+            if pages > 100:
+                raise MondayApiError("monday.com pagination exceeded the safe page limit.")
             data = await self._graphql(
                 query,
                 {"ids": [board_id], "limit": self.config.page_size, "cursor": cursor},
@@ -174,15 +185,27 @@ class MondayConnector(BaseConnector):
             if not boards:
                 break
             board = boards[0]
+            board_returned = True
             page = board.get("items_page") or {}
             for item in page.get("items") or []:
                 item["_board"] = {"id": str(board["id"]), "name": board.get("name"), "url": board.get("url")}
                 results.append(item)
+                group_id = str((item.get("group") or {}).get("id") or "")
+                if group_id:
+                    groups.add(group_id)
             cursor = page.get("cursor")
             if not cursor:
                 break
+            if cursor in seen_cursors:
+                raise MondayApiError("monday.com returned a repeated pagination cursor.")
+            seen_cursors.add(cursor)
 
-        return results
+        return results, {
+            "board_returned": board_returned,
+            "groups_returned": len(groups),
+            "raw_items_count": len(results),
+            "pages_fetched": pages,
+        }
 
     def _column(self, item, candidates, titles, types):
         columns = item.get("column_values") or []
@@ -256,12 +279,34 @@ class MondayConnector(BaseConnector):
 
     async def get_tasks(self, external_user_id: str | None = None) -> list[ConnectorTask]:
         tasks: list[ConnectorTask] = []
+        diagnostics: dict[str, object] = {
+            "boards_requested": len(self.config.board_ids),
+            "boards_returned": 0,
+            "groups_returned": 0,
+            "raw_items_count": 0,
+            "normalized_tasks_count": 0,
+            "skipped_items_count": 0,
+            "skip_reason_counts": {},
+            "pages_fetched": 0,
+        }
         for board_id in self.config.board_ids:
-            for item in await self._items(board_id):
-                task = self._normalize(item)
+            items, board_metrics = await self._items(board_id)
+            diagnostics["boards_returned"] += int(board_metrics["board_returned"])
+            diagnostics["groups_returned"] += int(board_metrics["groups_returned"])
+            diagnostics["raw_items_count"] += int(board_metrics["raw_items_count"])
+            diagnostics["pages_fetched"] += int(board_metrics["pages_fetched"])
+            for item in items:
+                try:
+                    task = self._normalize(item)
+                except (KeyError, TypeError, ValueError):
+                    diagnostics["skipped_items_count"] += 1
+                    diagnostics["skip_reason_counts"] = {"normalization_error": diagnostics["skipped_items_count"]}
+                    continue
                 if external_user_id and external_user_id not in task.assignee_ids:
                     continue
                 tasks.append(task)
+        diagnostics["normalized_tasks_count"] = len(tasks)
+        self.last_task_fetch_diagnostics = diagnostics
         return tasks
 
     async def search(self, query: str, limit: int = 10) -> list[ConnectorSearchResult]:

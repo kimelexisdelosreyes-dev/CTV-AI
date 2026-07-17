@@ -14,6 +14,7 @@ from app.api.routes import (
     knowledge,
     knowledge_dashboard,
     openai_compat,
+    operations,
     orchestrator,
     version,
 )
@@ -28,6 +29,7 @@ api_router.include_router(conversations.router)
 api_router.include_router(employees.router)
 api_router.include_router(employee_admin.router)
 api_router.include_router(connectors.router)
+api_router.include_router(operations.router)
 api_router.include_router(developer.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(orchestrator.router)

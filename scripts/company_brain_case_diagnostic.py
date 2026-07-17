@@ -149,6 +149,14 @@ def summarize_event(event: dict[str, Any] | None) -> dict[str, Any]:
             "knowledge_chunks_final": metrics.get("knowledge_chunks_final"),
             "operational_context_chars": metrics.get("operational_context_chars"),
             "operational_tasks_final": metrics.get("operational_tasks_final"),
+            "operations_context_source": metrics.get("operations_context_source"),
+            "operations_snapshot_id": metrics.get("operations_snapshot_id"),
+            "operations_snapshot_age_seconds": metrics.get(
+                "operations_snapshot_age_seconds"
+            ),
+            "operations_snapshot_freshness": metrics.get(
+                "operations_snapshot_freshness"
+            ),
             "employee_context_included": requirements.get("include_employee"),
             "prompt_budget_applied": metrics.get("prompt_budget_applied"),
             "prompt_components_omitted": metrics.get("prompt_components_omitted"),

@@ -118,6 +118,7 @@ class ContextRetrievalCoordinator:
                     force=True,
                     max_tasks=requirements.max_operational_tasks,
                     max_chars=requirements.max_operational_chars,
+                    instrumentation=instrumentation,
                 ),
             )
 

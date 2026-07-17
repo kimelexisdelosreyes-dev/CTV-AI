@@ -205,6 +205,47 @@ export type ConnectorTask = {
   };
 };
 
+export type OperationsSnapshotResponse = {
+  snapshot_id: string | null;
+  source: string;
+  status: string;
+  freshness: "fresh" | "stale" | "refreshing" | "failed" | "empty";
+  fetched_at: string | null;
+  age_seconds: number | null;
+  task_count: number;
+  tasks: ConnectorTask[];
+  projects: ConnectorProject[];
+  safe_error: string | null;
+};
+
+export type OperationsSyncStatusResponse = {
+  state: "idle" | "running";
+  running: boolean;
+  status:
+    | "idle"
+    | "running"
+    | "success"
+    | "failed"
+    | "stale"
+    | "suspicious_empty";
+  started_at: string | null;
+  last_success_at: string | null;
+  last_failure_at: string | null;
+  latest_snapshot_id: string | null;
+  latest_snapshot_age_seconds: number | null;
+  latest_snapshot_status: OperationsSnapshotResponse["freshness"];
+  safe_error: string | null;
+  can_refresh: boolean;
+  stale_running_recovered: boolean;
+};
+
+export type OperationsRefreshResponse = {
+  status: "running" | "success" | "suspicious_empty";
+  message: string;
+  running: boolean;
+  snapshot: OperationsSnapshotResponse;
+};
+
 export type InfrastructureServiceDetail = {
   status: string;
   category?: string | null;

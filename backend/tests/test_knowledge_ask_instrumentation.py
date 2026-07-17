@@ -64,8 +64,8 @@ async def test_non_operational_question_does_not_fetch_monday(monkeypatch) -> No
     async def empty_list(*_):
         return []
 
-    async def fail_monday_fetch(*_):
-        raise AssertionError("monday.com should not be fetched")
+    async def fail_operations_snapshot_fetch(*_):
+        raise AssertionError("operations snapshot should not be fetched")
 
     monkeypatch.setattr(
         context_engine_module.employee_service,
@@ -93,14 +93,9 @@ async def test_non_operational_question_does_not_fetch_monday(monkeypatch) -> No
         empty_list,
     )
     monkeypatch.setattr(
-        operations_context_module.connector_manager,
-        "tasks",
-        fail_monday_fetch,
-    )
-    monkeypatch.setattr(
-        operations_context_module.connector_manager,
-        "projects",
-        fail_monday_fetch,
+        operations_context_module.operations_snapshot_service,
+        "get_snapshot_response",
+        fail_operations_snapshot_fetch,
     )
 
     instrumentation = AskPerformanceInstrumentation()

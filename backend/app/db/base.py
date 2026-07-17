@@ -13,5 +13,9 @@ from app.db.models.employee import (  # noqa: F401
 )
 from app.db.models.knowledge_document import KnowledgeDocument  # noqa: F401
 from app.db.models.orchestrator_event import OrchestratorEvent  # noqa: F401
+from app.db.models.operations_snapshot import (  # noqa: F401
+    OperationTask,
+    OperationsSnapshot,
+)
 from app.db.models.user import User  # noqa: F401
 from app.db.session import Base

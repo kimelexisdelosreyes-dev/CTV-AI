@@ -3,10 +3,13 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from app.connectors.base import ConnectorError
-from app.connectors.manager import connector_manager
 from app.connectors.models import ConnectorTask
 from app.services.intelligence_router import intelligence_router
+from app.services.operations_snapshot_service import (
+    OperationsSnapshotUnavailableError,
+    operations_snapshot_service,
+)
+from app.services.performance_instrumentation import AskPerformanceInstrumentation
 
 
 @dataclass
@@ -108,6 +111,7 @@ class OperationsContextService:
         max_boards: int = 10,
         max_chars: int = 0,
         force: bool = False,
+        instrumentation: AskPerformanceInstrumentation | None = None,
     ) -> OperationsContext:
         if not force:
             return OperationsContext(
@@ -118,16 +122,28 @@ class OperationsContextService:
                 summary=None,
             )
 
-        try:
-            tasks = await connector_manager.tasks("monday")
-            projects = await connector_manager.projects("monday")
-        except ConnectorError:
-            return OperationsContext(
-                applied=False,
-                text="",
-                task_count=0,
-                board_count=0,
-                summary=None,
+        snapshot_started = instrumentation.clock() if instrumentation else 0.0
+        snapshot = await operations_snapshot_service.get_snapshot_response()
+        if snapshot.snapshot_id is None:
+            raise OperationsSnapshotUnavailableError()
+        tasks = snapshot.tasks
+        projects = snapshot.projects
+        if instrumentation:
+            instrumentation.record_metric("operations_context_source", "snapshot")
+            instrumentation.record_metric("operations_context_from_snapshot", True)
+            instrumentation.record_metric("operations_snapshot_id", str(snapshot.snapshot_id))
+            instrumentation.record_metric(
+                "operations_snapshot_age_seconds", snapshot.age_seconds
+            )
+            instrumentation.record_metric(
+                "operations_snapshot_freshness", snapshot.freshness
+            )
+            instrumentation.record_metric(
+                "operations_snapshot_task_count", snapshot.task_count
+            )
+            instrumentation.record_metric(
+                "operations_snapshot_fetch_duration_ms",
+                max((instrumentation.clock() - snapshot_started) * 1000, 0.0),
             )
 
         now = datetime.now(timezone.utc)
@@ -197,8 +213,9 @@ class OperationsContextService:
         )
 
         text = f"""
-LIVE OPERATIONAL CONTEXT - MONDAY.COM
+OPERATIONAL CONTEXT - MONDAY.COM SNAPSHOT
 UTC date: {now.date().isoformat()}
+Snapshot freshness: {snapshot.freshness}; age seconds: {snapshot.age_seconds}
 Summary: {summary_line}
 Board workload: {'; '.join(board_lines) if board_lines else 'No board data'}
 Relevant operational items:

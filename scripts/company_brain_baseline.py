@@ -305,6 +305,16 @@ def prompt_metrics_from_event(event: dict[str, Any] | None) -> dict[str, Any]:
         "operations_retrieval_duration_ms": metrics.get(
             "operations_retrieval_duration_ms"
         ),
+        "operations_context_source": metrics.get("operations_context_source"),
+        "operations_snapshot_age_seconds": metrics.get(
+            "operations_snapshot_age_seconds"
+        ),
+        "operations_snapshot_freshness": metrics.get(
+            "operations_snapshot_freshness"
+        ),
+        "operations_snapshot_task_count": metrics.get(
+            "operations_snapshot_task_count"
+        ),
         "employee_retrieval_duration_ms": metrics.get(
             "employee_retrieval_duration_ms"
         ),
@@ -381,6 +391,10 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
             "parallel_retrieval_used",
             "knowledge_retrieval_duration_ms",
             "operations_retrieval_duration_ms",
+            "operations_context_source",
+            "operations_snapshot_age_seconds",
+            "operations_snapshot_freshness",
+            "operations_snapshot_task_count",
             "employee_retrieval_duration_ms",
             "history_retrieval_duration_ms",
             "retrieval_total_duration_ms",
@@ -420,16 +434,16 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
         f"- Successful requests: {successful}/{len(results)}",
         "",
         "| Case | Result | Context | Prompt chars | Tokens | Budget | "
-        "Parallel | Retrieval ms | Saved est. ms | Degraded | Success | Status | "
+        "Parallel | Retrieval ms | Ops source | Snapshot age | Freshness | Saved est. ms | Degraded | Success | Status | "
         "Seconds | Sources | Ops tasks | Error |",
-        "| --- | --- | --- | ---: | ---: | --- | --- | ---: | ---: | --- | --- | --- | "
+        "| --- | --- | --- | ---: | ---: | --- | --- | ---: | --- | ---: | --- | ---: | --- | --- | --- | "
         "---: | ---: | ---: | --- |",
     ]
     for result in results:
         lines.append(
             "| {case_label} | {result_type} | {context} | {prompt_chars} | "
-            "{tokens} | {budget} | {parallel} | {retrieval_ms} | "
-            "{saved_ms} | {degraded} | {success} | {status_code} | "
+            "{tokens} | {budget} | {parallel} | {retrieval_ms} | {ops_source} | "
+            "{snapshot_age} | {freshness} | {saved_ms} | {degraded} | {success} | {status_code} | "
             "{duration_seconds} | {source_count} | {operational_tasks_used} | "
             "{error} |".format(
                 case_label=result.get("case_label"),
@@ -440,6 +454,9 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
                 budget=result.get("prompt_budget_applied") or False,
                 parallel=result.get("parallel_retrieval_used"),
                 retrieval_ms=result.get("retrieval_total_duration_ms") or "",
+                ops_source=result.get("operations_context_source") or "",
+                snapshot_age=result.get("operations_snapshot_age_seconds") or "",
+                freshness=result.get("operations_snapshot_freshness") or "",
                 saved_ms=result.get("parallel_time_saved_estimate_ms") or "",
                 degraded=result.get("context_degraded"),
                 success=result.get("success"),

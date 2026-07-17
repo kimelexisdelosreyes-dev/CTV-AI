@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -9,6 +10,7 @@ from app.connectors.bootstrap import register_builtin_connectors
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.services.embedding_service import embedding_service
+from app.services.operations_snapshot_service import operations_sync_loop
 
 
 @asynccontextmanager
@@ -22,7 +24,20 @@ async def lifespan(_: FastAPI):
             readiness.get("category"),
             readiness.get("model"),
         )
-    yield
+    sync_stop = asyncio.Event()
+    sync_task = None
+    if settings.operations_sync_enabled:
+        sync_task = asyncio.create_task(operations_sync_loop(sync_stop))
+    try:
+        yield
+    finally:
+        sync_stop.set()
+        if sync_task is not None:
+            sync_task.cancel()
+            try:
+                await sync_task
+            except asyncio.CancelledError:
+                pass
 
 
 app = FastAPI(

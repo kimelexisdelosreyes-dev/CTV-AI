@@ -6,6 +6,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
 } from "react";
 import {
   AlertTriangle,
@@ -20,14 +21,17 @@ import {
 
 import {
   apiFetch,
-  ConnectorHealth,
-  ConnectorProject,
   ConnectorTask,
+  OperationsRefreshResponse,
+  OperationsSnapshotResponse,
+  OperationsSyncStatusResponse,
 } from "@/lib/api";
 import {
   OperationsFilters,
   OperationsState,
-  operationsSnapshotIsStale,
+  stateAfterRefreshFailure,
+  stateFromServerSnapshot,
+  stateFromSyncStatus,
 } from "@/lib/operations-state";
 
 type Props = {
@@ -90,9 +94,12 @@ export function OperationsWorkspace({ state, setState }: Props) {
     state;
   const { query, board, status, priority } = state.filters;
   const now = useMemo(() => new Date(), []);
+  const loadInFlight = useRef(false);
+  const statusInFlight = useRef(false);
 
-  const load = useCallback(async (mode: "initial" | "background" | "manual") => {
-    if (state.loading || state.refreshing) return;
+  const load = useCallback(async (mode: "initial" | "manual") => {
+    if (loadInFlight.current || state.loading || state.refreshing) return;
+    loadInFlight.current = true;
 
     const hasSnapshot = state.lastUpdated !== null;
     setState((current) => ({
@@ -103,45 +110,83 @@ export function OperationsWorkspace({ state, setState }: Props) {
     }));
 
     try {
-      const [healthData, projectData, taskData] = await Promise.all([
-        apiFetch<ConnectorHealth[]>("/connectors/health"),
-        apiFetch<ConnectorProject[]>("/connectors/monday/projects"),
-        apiFetch<ConnectorTask[]>("/connectors/monday/tasks"),
-      ]);
-
-      setState((current) => ({
-        ...current,
-        health: healthData,
-        projects: projectData,
-        tasks: taskData,
-        loading: false,
-        refreshing: false,
-        error: "",
-        lastUpdated: new Date().toISOString(),
-      }));
+      if (mode === "manual") {
+        const result = await apiFetch<OperationsRefreshResponse>(
+          "/operations/refresh",
+          { method: "POST" },
+        );
+        setState((current) => ({
+          ...stateFromServerSnapshot(current, result.snapshot),
+          refreshing: result.running,
+          syncStatus: result.status,
+          syncMessage: result.message,
+        }));
+      } else {
+        const [snapshot, syncStatus] = await Promise.all([
+          apiFetch<OperationsSnapshotResponse>("/operations/snapshot"),
+          apiFetch<OperationsSyncStatusResponse>("/operations/sync/status"),
+        ]);
+        setState((current) =>
+          stateFromSyncStatus(
+            stateFromServerSnapshot(current, snapshot),
+            syncStatus,
+          ),
+        );
+      }
     } catch (cause) {
-      setState((current) => ({
-        ...current,
-        loading: false,
-        refreshing: false,
-        error:
+      setState((current) =>
+        stateAfterRefreshFailure(
+          current,
           cause instanceof Error
             ? cause.message
             : "Could not load monday.com operations data.",
-      }));
+        ),
+      );
+    } finally {
+      loadInFlight.current = false;
     }
   }, [setState, state.lastUpdated, state.loading, state.refreshing]);
 
   useEffect(() => {
+    if (!state.refreshing) return;
+    const handle = window.setTimeout(async () => {
+      if (statusInFlight.current) return;
+      statusInFlight.current = true;
+      try {
+        const syncStatus = await apiFetch<OperationsSyncStatusResponse>(
+          "/operations/sync/status",
+        );
+        setState((current) => stateFromSyncStatus(current, syncStatus));
+        if (!syncStatus.running) {
+          const snapshot = await apiFetch<OperationsSnapshotResponse>(
+            "/operations/snapshot",
+          );
+          setState((current) => stateFromServerSnapshot(current, snapshot));
+        }
+      } catch (cause) {
+        setState((current) =>
+          stateAfterRefreshFailure(
+            current,
+            cause instanceof Error
+              ? cause.message
+              : "Could not check operations refresh status.",
+          ),
+        );
+      } finally {
+        statusInFlight.current = false;
+      }
+    }, 2000);
+    return () => window.clearTimeout(handle);
+  }, [setState, state.refreshing]);
+
+  useEffect(() => {
     const handle = window.setTimeout(() => {
-      if (!state.lastUpdated) {
+      if (!state.snapshotLoaded) {
         void load("initial");
-      } else if (operationsSnapshotIsStale(state.lastUpdated, Date.now())) {
-        void load("background");
       }
     }, 0);
     return () => window.clearTimeout(handle);
-  }, [load, state.lastUpdated]);
+  }, [load, state.snapshotLoaded]);
 
   const summary = useMemo(() => {
     const completed = tasks.filter((task) => isDone(task.status)).length;
@@ -242,8 +287,12 @@ export function OperationsWorkspace({ state, setState }: Props) {
           <h1>Operations Workspace</h1>
           <p>
             {updatedLabel}
+            {state.freshness === "stale" ? " - Data may be stale" : ""}
             {refreshing ? " - Refreshing..." : ""}
           </p>
+          {state.syncMessage && state.syncStatus !== "suspicious_empty" && (
+            <p>{state.syncMessage}</p>
+          )}
         </div>
 
         <button
@@ -260,11 +309,35 @@ export function OperationsWorkspace({ state, setState }: Props) {
         <article className="panel operations-error">
           <AlertTriangle size={18} />
           <div>
-            <b>Operations refresh failed</b>
+            <b>
+              {lastUpdated
+                ? "Latest refresh failed"
+                : "Operations refresh failed"}
+            </b>
             <p>{error}</p>
             {lastUpdated && (
               <p>Showing data from {new Date(lastUpdated).toLocaleString()}.</p>
             )}
+          </div>
+        </article>
+      )}
+
+      {state.syncStatus === "suspicious_empty" && state.syncMessage && (
+        <article className="panel operations-error">
+          <AlertTriangle size={18} />
+          <div>
+            <b>Previous snapshot retained</b>
+            <p>{state.syncMessage}</p>
+          </div>
+        </article>
+      )}
+
+      {!loading && state.freshness === "empty" && (
+        <article className="panel operations-error">
+          <AlertTriangle size={18} />
+          <div>
+            <b>No operations snapshot yet</b>
+            <p>Refresh monday.com to create the first server snapshot.</p>
           </div>
         </article>
       )}
