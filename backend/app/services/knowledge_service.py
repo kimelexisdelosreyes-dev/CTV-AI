@@ -22,8 +22,17 @@ from app.services.document_parser import SUPPORTED_EXTENSIONS
 from app.services.embedding_service import embedding_service
 from app.services.intelligence_router import intelligence_router
 from app.services.knowledge_jobs import process_document_job
+from app.services.model_router import (
+    ModelRoutingDecision,
+    ModelRoutingInput,
+    model_router,
+)
 from app.services.ollama_service import ollama_service
-from app.services.performance_instrumentation import AskPerformanceInstrumentation
+from app.services.performance_instrumentation import (
+    AskPerformanceInstrumentation,
+    estimate_input_tokens,
+    prompt_character_count,
+)
 from app.services.vector_store import vector_store
 
 
@@ -37,6 +46,7 @@ class PreparedKnowledgeAnswer:
     sources: list[KnowledgeSource]
     personalization: ContextMetadata
     model_override: str | None
+    model_routing: ModelRoutingDecision | None = None
     fallback_answer: str | None = None
 
 
@@ -643,12 +653,33 @@ async def answer_with_knowledge(
                 truncated=sorted(set(prompt_truncated)),
             )
 
+    final_prompt_chars = prompt_character_count(messages)
+    routing_decision = await model_router.route(
+        ModelRoutingInput(
+            question=question,
+            intent=route.intent,
+            include_knowledge=requirements.include_knowledge,
+            include_operations=requirements.include_operations,
+            include_employee=requirements.include_employee,
+            source_count=len(sources),
+            operations_task_count=operational_tasks_final,
+            final_prompt_chars=final_prompt_chars,
+            estimated_prompt_tokens=estimate_input_tokens(final_prompt_chars),
+            streaming=prepare_for_stream,
+            explicit_model=model_override,
+        )
+    )
+    selected_model = routing_decision.selected_model
+    if instrumentation:
+        instrumentation.record_model_routing(routing_decision)
+
     if prepare_for_stream:
         return PreparedKnowledgeAnswer(
             messages=messages,
             sources=sources,
             personalization=personalization,
-            model_override=model_override,
+            model_override=selected_model,
+            model_routing=routing_decision,
         )
 
     ollama_timer = (
@@ -658,17 +689,16 @@ async def answer_with_knowledge(
     )
     with ollama_timer:
         if instrumentation:
-            instrumentation.model_name = model_override or settings.ollama_model
             instrumentation.record_inference_start()
         if instrumentation:
             answer, ollama_payload = await ollama_service.chat(
                 messages,
-                model=model_override,
+                model=selected_model,
                 return_metadata=True,
             )
             instrumentation.record_ollama_metrics(ollama_payload)
         else:
-            answer = await ollama_service.chat(messages, model=model_override)
+            answer = await ollama_service.chat(messages, model=selected_model)
 
     if instrumentation:
         instrumentation.record_answer(answer)

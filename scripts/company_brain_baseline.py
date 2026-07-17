@@ -169,7 +169,7 @@ def call_prompt(
             data = {}
         ok = False
         error = f"HTTP {exc.code}"
-    except (URLError, TimeoutError, json.JSONDecodeError) as exc:
+    except (URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
         status_code = None
         headers = {}
         data = {}
@@ -324,6 +324,12 @@ def prompt_metrics_from_event(event: dict[str, Any] | None) -> dict[str, Any]:
         "retrieval_total_duration_ms": metrics.get("retrieval_total_duration_ms"),
         "prompt_assembly_duration_ms": seconds_to_ms(stages.get("prompt_builder")),
         "inference_duration_ms": seconds_to_ms(stages.get("ollama_total")),
+        "model_selected": metrics.get("model_selected"),
+        "model_role": metrics.get("model_role"),
+        "model_routing_reason": metrics.get("model_routing_reason"),
+        "model_routing_complexity": metrics.get("model_routing_complexity"),
+        "model_fallback_used": metrics.get("model_fallback_used"),
+        "model_fallback_reason": metrics.get("model_fallback_reason"),
         "sequential_estimated_duration_ms": metrics.get(
             "sequential_estimated_duration_ms"
         ),
@@ -400,6 +406,12 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
             "retrieval_total_duration_ms",
             "prompt_assembly_duration_ms",
             "inference_duration_ms",
+            "model_selected",
+            "model_role",
+            "model_routing_reason",
+            "model_routing_complexity",
+            "model_fallback_used",
+            "model_fallback_reason",
             "sequential_estimated_duration_ms",
             "parallel_time_saved_estimate_ms",
             "context_degraded",
@@ -433,16 +445,16 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
         f"- Timeout seconds: {report['timeout_seconds']}",
         f"- Successful requests: {successful}/{len(results)}",
         "",
-        "| Case | Result | Context | Prompt chars | Tokens | Budget | "
+        "| Case | Result | Context | Prompt chars | Tokens | Model | Role | Complexity | Fallback | Budget | "
         "Parallel | Retrieval ms | Ops source | Snapshot age | Freshness | Saved est. ms | Degraded | Success | Status | "
         "Seconds | Sources | Ops tasks | Error |",
-        "| --- | --- | --- | ---: | ---: | --- | --- | ---: | --- | ---: | --- | ---: | --- | --- | --- | "
+        "| --- | --- | --- | ---: | ---: | --- | --- | --- | --- | --- | --- | ---: | --- | ---: | --- | ---: | --- | --- | --- | "
         "---: | ---: | ---: | --- |",
     ]
     for result in results:
         lines.append(
             "| {case_label} | {result_type} | {context} | {prompt_chars} | "
-            "{tokens} | {budget} | {parallel} | {retrieval_ms} | {ops_source} | "
+            "{tokens} | {model} | {role} | {complexity} | {fallback} | {budget} | {parallel} | {retrieval_ms} | {ops_source} | "
             "{snapshot_age} | {freshness} | {saved_ms} | {degraded} | {success} | {status_code} | "
             "{duration_seconds} | {source_count} | {operational_tasks_used} | "
             "{error} |".format(
@@ -451,6 +463,10 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
                 context=",".join(result.get("selected_context_types") or []),
                 prompt_chars=result.get("final_prompt_chars") or "",
                 tokens=result.get("estimated_prompt_tokens") or "",
+                model=result.get("model_selected") or "",
+                role=result.get("model_role") or "",
+                complexity=result.get("model_routing_complexity") or "",
+                fallback=result.get("model_fallback_used") or False,
                 budget=result.get("prompt_budget_applied") or False,
                 parallel=result.get("parallel_retrieval_used"),
                 retrieval_ms=result.get("retrieval_total_duration_ms") or "",

@@ -45,6 +45,10 @@ def test_benchmark_report_generation_writes_json_csv_and_markdown(tmp_path) -> N
                 "safe_detail": None,
                 "backend_request_id": "request-1",
                 "result_type": "generated_answer",
+                "model_selected": "qwen3:8b",
+                "model_role": "operations",
+                "model_routing_complexity": "moderate",
+                "model_fallback_used": False,
                 "answer_chars": 120,
                 "source_count": 2,
                 "operational_context_applied": True,
@@ -77,6 +81,8 @@ def test_benchmark_report_generation_writes_json_csv_and_markdown(tmp_path) -> N
     assert "CTV_ONE_BEARER_TOKEN" not in paths["json"].read_text(encoding="utf-8")
     assert "operations_priorities" in paths["csv"].read_text(encoding="utf-8")
     assert "result_type" in paths["csv"].read_text(encoding="utf-8")
+    assert "model_selected" in paths["csv"].read_text(encoding="utf-8")
+    assert "qwen3:8b" in paths["md"].read_text(encoding="utf-8")
     assert "Successful requests: 1/2" in paths["md"].read_text(encoding="utf-8")
 
 
@@ -127,6 +133,27 @@ def test_call_prompt_captures_controlled_backend_error(monkeypatch) -> None:
     assert result["error_category"] == "embedding_model_missing"
     assert result["result_type"] == "service_failure"
     assert result["safe_detail"] == "The configured embedding model is not available."
+
+
+def test_call_prompt_records_connection_reset_instead_of_aborting(monkeypatch) -> None:
+    benchmark = load_benchmark_module()
+
+    def reset_connection(*_, **__):
+        raise ConnectionResetError("simulated reset")
+
+    monkeypatch.setattr(benchmark, "urlopen", reset_connection)
+
+    result = benchmark.call_prompt(
+        "http://127.0.0.1:8000/api/v1",
+        "token",
+        1,
+        "company_policy",
+        "What company policy applies?",
+    )
+
+    assert result["success"] is False
+    assert result["error"] == "ConnectionResetError"
+    assert result["result_type"] == "service_failure"
 
 
 def test_result_type_for_model_errors() -> None:

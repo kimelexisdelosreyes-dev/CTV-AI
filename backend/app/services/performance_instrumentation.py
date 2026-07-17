@@ -4,9 +4,14 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from time import perf_counter
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from app.core.config import settings
 from app.core.context_requirements import ContextRequirements
+
+if TYPE_CHECKING:
+    from app.services.model_router import ModelRoutingDecision
 
 
 REQUEST_STAGES = (
@@ -260,6 +265,27 @@ class AskPerformanceInstrumentation:
         self.record_metric(
             "inference_start_offset_ms",
             max((self.inference_started_at - self.request_started_at) * 1000, 0.0),
+        )
+
+    def record_model_routing(self, decision: "ModelRoutingDecision") -> None:
+        if not self.enabled:
+            return
+        self.model_name = decision.selected_model
+        self.record_metric("model_router_enabled", settings.ctv_one_model_router_enabled)
+        self.record_metric("model_selected", decision.selected_model)
+        self.record_metric("model_role", decision.model_role)
+        self.record_metric("model_routing_reason", decision.routing_reason)
+        self.record_metric("model_routing_confidence", decision.confidence)
+        self.record_metric("model_routing_complexity", decision.complexity)
+        self.record_metric("model_fallback_used", decision.fallback_used)
+        self.record_metric("model_fallback_reason", decision.fallback_reason)
+        self.record_metric(
+            "model_availability_checked",
+            decision.availability_checked,
+        )
+        self.record_metric(
+            "model_routing_duration_ms",
+            decision.routing_duration_ms,
         )
 
     def record_stream_started(self) -> None:

@@ -163,6 +163,12 @@ def summarize_event(event: dict[str, Any] | None) -> dict[str, Any]:
             "prompt_components_truncated": metrics.get("prompt_components_truncated"),
         },
         "ollama": {
+            "selected_model": metrics.get("model_selected"),
+            "model_role": metrics.get("model_role"),
+            "complexity": metrics.get("model_routing_complexity"),
+            "routing_reason": metrics.get("model_routing_reason"),
+            "fallback_used": metrics.get("model_fallback_used"),
+            "fallback_reason": metrics.get("model_fallback_reason"),
             "prompt_eval_count": metrics.get("prompt_eval_count"),
             "eval_count": metrics.get("eval_count"),
             "load_duration": metrics.get("load_duration"),

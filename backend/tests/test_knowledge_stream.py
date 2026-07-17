@@ -46,10 +46,11 @@ def test_stream_emits_safe_progressive_events(monkeypatch) -> None:
             personalization=ContextMetadata(
                 routed_intent="policy", routing_confidence=0.9
             ),
-            model_override=None,
+            model_override="routed:test",
         )
 
-    async def fake_stream(*_args, **_kwargs):
+    async def fake_stream(*_args, **kwargs):
+        assert kwargs["model"] == "routed:test"
         yield OllamaStreamEvent(text="Visible ")
         yield OllamaStreamEvent(text="answer")
         yield OllamaStreamEvent(done=True, metadata={"eval_count": 2})

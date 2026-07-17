@@ -19,6 +19,14 @@ class Settings(BaseSettings):
     ollama_embedding_model: str = "embeddinggemma"
     ollama_num_predict: int = 768
     ollama_think: bool = False
+    ctv_one_model_router_enabled: bool = True
+    ctv_one_model_fast: str | None = None
+    ctv_one_model_balanced: str | None = None
+    ctv_one_model_reasoning: str | None = None
+    ctv_one_model_operations: str | None = None
+    ctv_one_model_knowledge: str | None = None
+    ctv_one_model_default: str | None = None
+    ctv_one_model_availability_ttl_seconds: float = 300.0
     company_brain_max_knowledge_chunks: int = 4
     company_brain_max_knowledge_chars: int = 3200
     company_brain_max_operational_tasks: int = 6

@@ -5,6 +5,7 @@ import pytest
 
 from app.schemas.context import ContextBundle, ContextMetadata
 from app.schemas.knowledge import KnowledgeSource
+from app.core.config import settings
 from app.services import context_retrieval_coordinator as coordinator_module
 from app.services import knowledge_service
 from app.services.knowledge_service import answer_with_knowledge
@@ -31,6 +32,7 @@ def source() -> KnowledgeSource:
 
 async def fake_chat(messages, model=None, return_metadata=False):
     fake_chat.messages = messages
+    fake_chat.model = model
     payload = {
         "prompt_eval_count": 10,
         "eval_count": 5,
@@ -64,6 +66,7 @@ async def test_knowledge_only_route_excludes_employee_and_operations(monkeypatch
         fail_operations,
     )
     monkeypatch.setattr(knowledge_service.ollama_service, "chat", fake_chat)
+    monkeypatch.setattr(settings, "ctv_one_model_router_enabled", False)
 
     instrumentation = AskPerformanceInstrumentation()
     answer, sources, personalization = await answer_with_knowledge(
@@ -83,6 +86,9 @@ async def test_knowledge_only_route_excludes_employee_and_operations(monkeypatch
     assert personalization.operational_context_applied is False
     assert "Knowledge Context" in prompt_text
     assert "Operational Context" not in prompt_text
+    assert fake_chat.model == settings.ollama_model
+    assert instrumentation.metrics["model_selected"] == settings.ollama_model
+    assert instrumentation.metrics["model_fallback_reason"] == "router_disabled"
     assert "Employee Context" not in prompt_text
     assert instrumentation.context_requirements["include_knowledge"] is True
     assert instrumentation.context_requirements["include_employee"] is False
