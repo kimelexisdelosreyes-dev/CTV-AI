@@ -17,13 +17,12 @@ from app.db.models.knowledge_document import KnowledgeDocument
 from app.db.models.user import User
 from app.schemas.context import ContextMetadata
 from app.schemas.knowledge import KnowledgeSource, KnowledgeStatsResponse
-from app.services.context_engine import context_engine
+from app.services.context_retrieval_coordinator import context_retrieval_coordinator
 from app.services.document_parser import SUPPORTED_EXTENSIONS
 from app.services.embedding_service import embedding_service
 from app.services.intelligence_router import intelligence_router
 from app.services.knowledge_jobs import process_document_job
 from app.services.ollama_service import ollama_service
-from app.services.operations_context_service import operations_context_service
 from app.services.performance_instrumentation import AskPerformanceInstrumentation
 from app.services.vector_store import vector_store
 
@@ -352,6 +351,7 @@ async def answer_with_knowledge(
     db,
     instrumentation: AskPerformanceInstrumentation | None = None,
     model_override: str | None = None,
+    conversation_id: uuid.UUID | None = None,
 ):
     router_timer = (
         instrumentation.measure("intelligence_router")
@@ -374,6 +374,8 @@ async def answer_with_knowledge(
 
     if not use_employee_context:
         requirements = replace(requirements, include_employee=False)
+    if conversation_id is not None:
+        requirements = replace(requirements, include_history=True)
 
     if instrumentation:
         instrumentation.record_context_requirements(requirements)
@@ -384,20 +386,24 @@ async def answer_with_knowledge(
         )
 
     retrieval_timer = (
-        instrumentation.measure("knowledge_retrieval")
+        instrumentation.measure("context_retrieval")
         if instrumentation
         else nullcontext()
     )
     with retrieval_timer:
-        if requirements.include_knowledge:
-            sources = await _search_routed_collections(
-                question,
-                min(top_k, requirements.max_knowledge_chunks),
-                routed_collections,
-                instrumentation,
-            )
-        else:
-            sources = []
+        retrieval = await context_retrieval_coordinator.retrieve(
+            question=question,
+            top_k=top_k,
+            routed_collections=routed_collections,
+            requirements=requirements,
+            route=route,
+            current_user=current_user,
+            db=db,
+            conversation_id=conversation_id,
+            knowledge_fetcher=_search_routed_collections,
+            instrumentation=instrumentation,
+        )
+    sources = retrieval.knowledge
     if instrumentation:
         instrumentation.retrieved_chunk_count = len(sources)
 
@@ -436,40 +442,14 @@ async def answer_with_knowledge(
     prompt_truncated = list(knowledge_truncated)
     prompt_omitted: list[str] = []
 
-    if requirements.include_employee:
-        employee_context_timer = (
-            instrumentation.measure("employee_context")
-            if instrumentation
-            else nullcontext()
-        )
-        with employee_context_timer:
-            bundle = await context_engine.build_employee_context(
-                db,
-                current_user,
-                question=question,
-                route=route,
-                instrumentation=instrumentation,
-                include_operations=False,
-                max_employee_context_chars=requirements.max_employee_context_chars,
-            )
-        employee_context = bundle.system_context
-        personalization = bundle.metadata
+    if requirements.include_employee and retrieval.employee is not None:
+        employee_context = retrieval.employee.system_context
+        personalization = retrieval.employee.metadata
     else:
         prompt_omitted.append("employee")
 
-    if requirements.include_operations:
-        operational_context_timer = (
-            instrumentation.measure("operational_context")
-            if instrumentation
-            else nullcontext()
-        )
-        with operational_context_timer:
-            operations = await operations_context_service.build(
-                question,
-                force=True,
-                max_tasks=requirements.max_operational_tasks,
-                max_chars=requirements.max_operational_chars,
-            )
+    if requirements.include_operations and retrieval.operations is not None:
+        operations = retrieval.operations
         operations_text = operations.text
         operational_original_chars = operations.original_chars
         operational_final_chars = operations.final_chars
@@ -488,8 +468,15 @@ async def answer_with_knowledge(
 
     if not requirements.include_knowledge:
         prompt_omitted.append("knowledge")
-    if not requirements.include_history:
+    history_text = retrieval.history
+    if not requirements.include_history or not history_text:
         prompt_omitted.append("history")
+
+    personalization.context_degraded = retrieval.context_degraded
+    personalization.unavailable_context_components = (
+        retrieval.unavailable_context_components
+    )
+    personalization.required_context_failure = retrieval.required_context_failure
 
     if not sources and not personalization.operational_context_applied:
         if requirements.include_employee:
@@ -551,6 +538,7 @@ async def answer_with_knowledge(
             ("Knowledge Context", knowledge_text),
             ("Operational Context", operations_text),
             ("Employee Context", employee_context),
+            ("Conversation History", history_text),
         ]
         sections, total_truncated, budget_applied = _apply_total_prompt_budget(
             system_prompt=system_prompt,
@@ -592,10 +580,16 @@ async def answer_with_knowledge(
                 "operational_tasks_final",
                 operational_tasks_final,
             )
-            instrumentation.record_metric("history_original_chars", 0)
-            instrumentation.record_metric("history_final_chars", 0)
-            instrumentation.record_metric("history_messages_original", 0)
-            instrumentation.record_metric("history_messages_final", 0)
+            instrumentation.record_metric("history_original_chars", len(history_text))
+            instrumentation.record_metric("history_final_chars", len(history_text))
+            instrumentation.record_metric(
+                "history_messages_original",
+                len(history_text.splitlines()) if history_text else 0,
+            )
+            instrumentation.record_metric(
+                "history_messages_final",
+                len(history_text.splitlines()) if history_text else 0,
+            )
             instrumentation.record_prompt(
                 messages,
                 system_prompt=system_prompt,
@@ -609,6 +603,10 @@ async def answer_with_knowledge(
                 ),
                 employee_context=next(
                     (content for heading, content in sections if heading == "Employee Context"),
+                    "",
+                ),
+                history_context=next(
+                    (content for heading, content in sections if heading == "Conversation History"),
                     "",
                 ),
                 user_question=question,
@@ -627,6 +625,7 @@ async def answer_with_knowledge(
     with ollama_timer:
         if instrumentation:
             instrumentation.model_name = model_override or settings.ollama_model
+            instrumentation.record_inference_start()
         if instrumentation:
             answer, ollama_payload = await ollama_service.chat(
                 messages,

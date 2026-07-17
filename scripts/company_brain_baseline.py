@@ -288,13 +288,48 @@ def read_performance_event(
 def prompt_metrics_from_event(event: dict[str, Any] | None) -> dict[str, Any]:
     metrics = event.get("metrics") if isinstance(event, dict) else {}
     requirements = event.get("context_requirements") if isinstance(event, dict) else {}
+    stages = event.get("stages") if isinstance(event, dict) else {}
     if not isinstance(metrics, dict):
         metrics = {}
     if not isinstance(requirements, dict):
         requirements = {}
+    if not isinstance(stages, dict):
+        stages = {}
 
     return {
         "selected_context_types": requirements.get("selected_context_types", []),
+        "parallel_retrieval_used": metrics.get("retrieval_parallel_used"),
+        "knowledge_retrieval_duration_ms": metrics.get(
+            "knowledge_retrieval_duration_ms"
+        ),
+        "operations_retrieval_duration_ms": metrics.get(
+            "operations_retrieval_duration_ms"
+        ),
+        "employee_retrieval_duration_ms": metrics.get(
+            "employee_retrieval_duration_ms"
+        ),
+        "history_retrieval_duration_ms": metrics.get(
+            "history_retrieval_duration_ms"
+        ),
+        "retrieval_total_duration_ms": metrics.get("retrieval_total_duration_ms"),
+        "prompt_assembly_duration_ms": seconds_to_ms(stages.get("prompt_builder")),
+        "inference_duration_ms": seconds_to_ms(stages.get("ollama_total")),
+        "sequential_estimated_duration_ms": metrics.get(
+            "sequential_estimated_duration_ms"
+        ),
+        "parallel_time_saved_estimate_ms": metrics.get(
+            "parallel_time_saved_estimate_ms"
+        ),
+        "context_degraded": metrics.get("context_degraded"),
+        "successful_context_components": metrics.get(
+            "successful_context_components",
+            [],
+        ),
+        "failed_context_components": metrics.get("failed_context_components", []),
+        "timed_out_context_components": metrics.get(
+            "timed_out_context_components",
+            [],
+        ),
         "final_prompt_chars": metrics.get("final_prompt_chars"),
         "estimated_prompt_tokens": metrics.get("estimated_prompt_tokens"),
         "knowledge_chunks_used": metrics.get("knowledge_chunks_final"),
@@ -304,6 +339,12 @@ def prompt_metrics_from_event(event: dict[str, Any] | None) -> dict[str, Any]:
         "prompt_components_omitted": metrics.get("prompt_components_omitted", []),
         "prompt_components_truncated": metrics.get("prompt_components_truncated", []),
     }
+
+
+def seconds_to_ms(value: Any) -> float | None:
+    if isinstance(value, int | float):
+        return round(float(value) * 1000, 3)
+    return None
 
 
 def report_paths(output_dir: Path, generated_at: str) -> dict[str, Path]:
@@ -337,6 +378,20 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
             "backend_request_id",
             "result_type",
             "selected_context_types",
+            "parallel_retrieval_used",
+            "knowledge_retrieval_duration_ms",
+            "operations_retrieval_duration_ms",
+            "employee_retrieval_duration_ms",
+            "history_retrieval_duration_ms",
+            "retrieval_total_duration_ms",
+            "prompt_assembly_duration_ms",
+            "inference_duration_ms",
+            "sequential_estimated_duration_ms",
+            "parallel_time_saved_estimate_ms",
+            "context_degraded",
+            "successful_context_components",
+            "failed_context_components",
+            "timed_out_context_components",
             "final_prompt_chars",
             "estimated_prompt_tokens",
             "knowledge_chunks_used",
@@ -365,13 +420,16 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
         f"- Successful requests: {successful}/{len(results)}",
         "",
         "| Case | Result | Context | Prompt chars | Tokens | Budget | "
-        "Success | Status | Seconds | Sources | Ops tasks | Error |",
-        "| --- | --- | --- | ---: | ---: | --- | --- | --- | ---: | ---: | ---: | --- |",
+        "Parallel | Retrieval ms | Saved est. ms | Degraded | Success | Status | "
+        "Seconds | Sources | Ops tasks | Error |",
+        "| --- | --- | --- | ---: | ---: | --- | --- | ---: | ---: | --- | --- | --- | "
+        "---: | ---: | ---: | --- |",
     ]
     for result in results:
         lines.append(
             "| {case_label} | {result_type} | {context} | {prompt_chars} | "
-            "{tokens} | {budget} | {success} | {status_code} | "
+            "{tokens} | {budget} | {parallel} | {retrieval_ms} | "
+            "{saved_ms} | {degraded} | {success} | {status_code} | "
             "{duration_seconds} | {source_count} | {operational_tasks_used} | "
             "{error} |".format(
                 case_label=result.get("case_label"),
@@ -380,6 +438,10 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
                 prompt_chars=result.get("final_prompt_chars") or "",
                 tokens=result.get("estimated_prompt_tokens") or "",
                 budget=result.get("prompt_budget_applied") or False,
+                parallel=result.get("parallel_retrieval_used"),
+                retrieval_ms=result.get("retrieval_total_duration_ms") or "",
+                saved_ms=result.get("parallel_time_saved_estimate_ms") or "",
+                degraded=result.get("context_degraded"),
                 success=result.get("success"),
                 status_code=result.get("status_code") or "",
                 duration_seconds=result.get("duration_seconds"),

@@ -103,7 +103,40 @@ def summarize_event(event: dict[str, Any] | None) -> dict[str, Any]:
 
     metrics = event.get("metrics") or {}
     requirements = event.get("context_requirements") or {}
+    stages = event.get("stages") or {}
     return {
+        "route": {
+            "intent": event.get("routed_intent"),
+            "confidence": event.get("routing_confidence"),
+        },
+        "retrieval": {
+            "required_contexts": metrics.get("required_context_components", []),
+            "selected_contexts": requirements.get("selected_context_types", []),
+            "parallel_used": metrics.get("retrieval_parallel_used"),
+            "component_durations_ms": {
+                "knowledge": metrics.get("knowledge_retrieval_duration_ms"),
+                "operations": metrics.get("operations_retrieval_duration_ms"),
+                "employee": metrics.get("employee_retrieval_duration_ms"),
+                "history": metrics.get("history_retrieval_duration_ms"),
+            },
+            "retrieval_wall_time_ms": metrics.get("retrieval_total_duration_ms"),
+            "sequential_estimated_duration_ms": metrics.get(
+                "sequential_estimated_duration_ms"
+            ),
+            "parallel_time_saved_estimate_ms": metrics.get(
+                "parallel_time_saved_estimate_ms"
+            ),
+            "degraded": metrics.get("context_degraded"),
+            "unavailable_components": metrics.get(
+                "unavailable_context_components",
+                [],
+            ),
+            "failed_components": metrics.get("failed_context_components", []),
+            "timed_out_components": metrics.get(
+                "timed_out_context_components",
+                [],
+            ),
+        },
         "prompt": {
             "selected_context_types": requirements.get(
                 "selected_context_types",
@@ -131,8 +164,19 @@ def summarize_event(event: dict[str, Any] | None) -> dict[str, Any]:
             "tokens_per_second": metrics.get("tokens_per_second"),
             "first_token_seconds": metrics.get("first_token_seconds"),
         },
+        "timing": {
+            "prompt_assembly_duration_ms": seconds_to_ms(stages.get("prompt_builder")),
+            "inference_duration_ms": seconds_to_ms(stages.get("ollama_total")),
+            "total_duration_ms": seconds_to_ms(stages.get("total_request")),
+        },
         "error_diagnostics": event.get("error_diagnostics") or {},
     }
+
+
+def seconds_to_ms(value: Any) -> float | None:
+    if isinstance(value, int | float):
+        return round(float(value) * 1000, 3)
+    return None
 
 
 def main() -> int:

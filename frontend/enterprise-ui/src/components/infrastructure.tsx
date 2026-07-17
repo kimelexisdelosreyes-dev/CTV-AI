@@ -1,8 +1,9 @@
 import { DeveloperConsole } from "@/components/developer-console";
 import { User } from "@/lib/api";
+import { InfrastructureStatusRow } from "@/lib/infrastructure-status";
 
 type Props = {
-  data: Record<string, string> | null;
+  data: InfrastructureStatusRow[] | null;
   user: User;
 };
 
@@ -18,18 +19,24 @@ export function Infrastructure({ data, user }: Props) {
       </div>
 
       <div className="assistant-grid">
-        {Object.entries(data ?? {}).map(([name, value]) => (
-          <article className="assistant-card" key={name}>
+        {(data ?? []).map((service) => (
+          <article className="assistant-card" key={service.key}>
             <div
               className={
-                value === "healthy" ? "health-dot good-bg" : "health-dot bad-bg"
+                service.isHealthy ? "health-dot good-bg" : "health-dot bad-bg"
               }
             />
-            <h3>{name}</h3>
-            <p className={value === "healthy" ? "good" : "bad"}>{value}</p>
+            <h3>{service.label}</h3>
+            <p className={service.isHealthy ? "good" : "bad"}>
+              Status: {service.status}
+            </p>
+            <p>Category: {service.category}</p>
+            <p>Model: {service.model}</p>
           </article>
         ))}
       </div>
+
+      {!data?.length && <p className="muted">Status data is unavailable.</p>}
 
       {user.role === "admin" && <DeveloperConsole />}
     </section>

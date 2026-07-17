@@ -73,6 +73,20 @@ td span { display: block; color: var(--muted); font-size: 11px; margin-top: 4px;
 .source-list { display: grid; gap: 12px; }
 .source-card { background: var(--panel-2); padding: 14px; border-radius: 12px; }
 .source-card span { display: block; color: var(--muted); font-size: 11px; margin-top: 4px; }
+.brain-layout { display: grid; grid-template-columns: minmax(240px, 300px) 1fr; gap: 18px; align-items: start; }
+.brain-recents { position: sticky; top: 18px; }
+.brain-recents > button { width: 100%; border: 0; background: var(--orange); color: white; padding: 11px 14px; border-radius: 10px; font-weight: 800; margin-bottom: 14px; }
+.recent-list { display: grid; gap: 10px; }
+.recent-item { border: 1px solid var(--line); background: var(--panel-2); border-radius: 12px; padding: 10px; }
+.recent-item.active { border-color: var(--orange); }
+.recent-item > button { width: 100%; border: 0; background: transparent; color: var(--text); text-align: left; display: grid; gap: 4px; padding: 0; }
+.recent-item span { color: var(--muted); font-size: 12px; }
+.recent-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.recent-actions button { border: 1px solid var(--line); background: #0f141a; color: var(--muted); border-radius: 8px; padding: 5px 7px; font-size: 12px; }
+.message-list { display: grid; gap: 12px; margin: 14px 0; }
+.chat-message { border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: var(--panel-2); }
+.chat-message.user { background: #17202a; }
+.chat-message p { margin: 6px 0 0; white-space: pre-wrap; line-height: 1.55; }
 .login-screen, .loading-screen { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at 50% 20%, rgba(255,122,26,.13), transparent 35%), var(--bg); }
 .login-card { width: min(430px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 20px; padding: 30px; }
 .login-card p { color: var(--muted); }
@@ -114,6 +128,8 @@ td span { display: block; color: var(--muted); font-size: 11px; margin-top: 4px;
   .logout { display: none; }
   .content { padding: 24px 16px; }
   .two-column, .assistant-grid { grid-template-columns: 1fr; }
+  .brain-layout { grid-template-columns: 1fr; }
+  .brain-recents { position: static; }
   .developer-console-heading { display: grid; }
   .developer-actions { justify-content: flex-start; }
   .developer-bar-row { grid-template-columns: 78px minmax(90px, 1fr) 74px; }

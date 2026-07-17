@@ -178,6 +178,9 @@ def test_ask_response_schema_remains_unchanged(monkeypatch, caplog) -> None:
         "routing_confidence",
         "routed_collections",
         "intelligence_sources",
+        "context_degraded",
+        "unavailable_context_components",
+        "required_context_failure",
     }
     assert "do not log prompt text" not in caplog.text
     assert "do not log answer text" not in caplog.text

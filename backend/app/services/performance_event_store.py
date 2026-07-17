@@ -36,6 +36,7 @@ SAFE_EVENT_FIELDS = {
     "monday_operational_context_ms",
     "embedding_ms",
     "qdrant_vector_search_ms",
+    "history_loading_ms",
     "prompt_assembly_ms",
     "ollama_request_ms",
     "prompt_character_count",
@@ -59,6 +60,7 @@ STAGE_FIELDS = {
     "monday_operational_context_ms": "monday_operational_context",
     "embedding_ms": "embedding",
     "qdrant_vector_search_ms": "qdrant_vector_search",
+    "history_loading_ms": "history_loading",
     "prompt_assembly_ms": "prompt_assembly",
     "ollama_request_ms": "ollama_request",
 }

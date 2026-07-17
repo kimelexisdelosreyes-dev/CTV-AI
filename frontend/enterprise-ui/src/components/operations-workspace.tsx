@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import {
+  Dispatch,
+  SetStateAction,
+  useCallback,
+  useEffect,
+  useMemo,
+} from "react";
 import {
   AlertTriangle,
   CalendarClock,
@@ -12,45 +18,21 @@ import {
   Workflow,
 } from "lucide-react";
 
-import { apiFetch } from "@/lib/api";
+import {
+  apiFetch,
+  ConnectorHealth,
+  ConnectorProject,
+  ConnectorTask,
+} from "@/lib/api";
+import {
+  OperationsFilters,
+  OperationsState,
+  operationsSnapshotIsStale,
+} from "@/lib/operations-state";
 
-type ConnectorHealth = {
-  name: string;
-  status: "healthy" | "degraded" | "unavailable" | "disabled";
-  checked_at: string;
-  latency_ms: number | null;
-  detail: string | null;
-};
-
-type ConnectorProject = {
-  external_id: string;
-  name: string;
-  status: string | null;
-  owner_ids: string[];
-  start_at: string | null;
-  due_at: string | null;
-  url: string | null;
-  metadata: Record<string, unknown>;
-};
-
-type ConnectorTask = {
-  external_id: string;
-  title: string;
-  status: string | null;
-  priority: string | null;
-  due_at: string | null;
-  assignee_ids: string[];
-  project_id: string | null;
-  url: string | null;
-  metadata: {
-    board_name?: string;
-    board_url?: string;
-    group_id?: string;
-    group_title?: string;
-    created_at?: string;
-    updated_at?: string;
-    [key: string]: unknown;
-  };
+type Props = {
+  state: OperationsState;
+  setState: Dispatch<SetStateAction<OperationsState>>;
 };
 
 function sameLocalDay(value: string | null, date: Date): boolean {
@@ -79,38 +61,46 @@ function isOverdue(task: ConnectorTask, now: Date): boolean {
 function statusClass(status: string | null): string {
   const value = (status ?? "").toLowerCase();
 
-  if (value.includes("done") || value.includes("complete")) return "status-chip status-done";
-  if (value.includes("stuck") || value.includes("blocked")) return "status-chip status-stuck";
-  if (value.includes("working") || value.includes("progress")) return "status-chip status-working";
+  if (value.includes("done") || value.includes("complete")) {
+    return "status-chip status-done";
+  }
+  if (value.includes("stuck") || value.includes("blocked")) {
+    return "status-chip status-stuck";
+  }
+  if (value.includes("working") || value.includes("progress")) {
+    return "status-chip status-working";
+  }
   return "status-chip status-neutral";
 }
 
 function priorityClass(priority: string | null): string {
   const value = (priority ?? "").toLowerCase();
 
-  if (value.includes("critical") || value.includes("urgent")) return "priority-chip priority-critical";
+  if (value.includes("critical") || value.includes("urgent")) {
+    return "priority-chip priority-critical";
+  }
   if (value.includes("high")) return "priority-chip priority-high";
   if (value.includes("medium")) return "priority-chip priority-medium";
   if (value.includes("low")) return "priority-chip priority-low";
   return "priority-chip";
 }
 
-export function OperationsWorkspace() {
-  const [health, setHealth] = useState<ConnectorHealth[]>([]);
-  const [projects, setProjects] = useState<ConnectorProject[]>([]);
-  const [tasks, setTasks] = useState<ConnectorTask[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState("");
+export function OperationsWorkspace({ state, setState }: Props) {
+  const { health, projects, tasks, loading, refreshing, error, lastUpdated } =
+    state;
+  const { query, board, status, priority } = state.filters;
+  const now = useMemo(() => new Date(), []);
 
-  const [query, setQuery] = useState("");
-  const [board, setBoard] = useState("all");
-  const [status, setStatus] = useState("all");
-  const [priority, setPriority] = useState("all");
+  const load = useCallback(async (mode: "initial" | "background" | "manual") => {
+    if (state.loading || state.refreshing) return;
 
-  async function load(initial = false) {
-    initial ? setLoading(true) : setRefreshing(true);
-    setError("");
+    const hasSnapshot = state.lastUpdated !== null;
+    setState((current) => ({
+      ...current,
+      loading: mode === "initial" && !hasSnapshot,
+      refreshing: mode !== "initial" || hasSnapshot,
+      error: "",
+    }));
 
     try {
       const [healthData, projectData, taskData] = await Promise.all([
@@ -119,26 +109,39 @@ export function OperationsWorkspace() {
         apiFetch<ConnectorTask[]>("/connectors/monday/tasks"),
       ]);
 
-      setHealth(healthData);
-      setProjects(projectData);
-      setTasks(taskData);
+      setState((current) => ({
+        ...current,
+        health: healthData,
+        projects: projectData,
+        tasks: taskData,
+        loading: false,
+        refreshing: false,
+        error: "",
+        lastUpdated: new Date().toISOString(),
+      }));
     } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "Could not load monday.com operations data.",
-      );
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+      setState((current) => ({
+        ...current,
+        loading: false,
+        refreshing: false,
+        error:
+          cause instanceof Error
+            ? cause.message
+            : "Could not load monday.com operations data.",
+      }));
     }
-  }
+  }, [setState, state.lastUpdated, state.loading, state.refreshing]);
 
   useEffect(() => {
-    load(true).catch(console.error);
-  }, []);
-
-  const now = new Date();
+    const handle = window.setTimeout(() => {
+      if (!state.lastUpdated) {
+        void load("initial");
+      } else if (operationsSnapshotIsStale(state.lastUpdated, Date.now())) {
+        void load("background");
+      }
+    }, 0);
+    return () => window.clearTimeout(handle);
+  }, [load, state.lastUpdated]);
 
   const summary = useMemo(() => {
     const completed = tasks.filter((task) => isDone(task.status)).length;
@@ -155,7 +158,7 @@ export function OperationsWorkspace() {
       completed,
       boards: projects.length,
     };
-  }, [tasks, projects]);
+  }, [tasks, projects, now]);
 
   const boardNames = useMemo(
     () =>
@@ -223,9 +226,12 @@ export function OperationsWorkspace() {
   const lastChecked = mondayHealth?.checked_at
     ? new Date(mondayHealth.checked_at).toLocaleString()
     : "Not available";
+  const updatedLabel = lastUpdated
+    ? `Updated ${new Date(lastUpdated).toLocaleString()}`
+    : "Not updated yet";
 
   if (loading) {
-    return <section className="panel">Loading Operations Workspace…</section>;
+    return <section className="panel">Loading Operations Workspace...</section>;
   }
 
   return (
@@ -234,16 +240,19 @@ export function OperationsWorkspace() {
         <div>
           <span className="eyebrow">ENTERPRISE OPERATIONS</span>
           <h1>Operations Workspace</h1>
-          <p>Live project and task visibility from monday.com.</p>
+          <p>
+            {updatedLabel}
+            {refreshing ? " - Refreshing..." : ""}
+          </p>
         </div>
 
         <button
           className="operations-refresh"
-          onClick={() => load(false)}
+          onClick={() => load("manual")}
           disabled={refreshing}
         >
           <RefreshCw size={16} className={refreshing ? "spin" : ""} />
-          {refreshing ? "Refreshing…" : "Refresh monday"}
+          {refreshing ? "Refreshing..." : "Refresh monday"}
         </button>
       </div>
 
@@ -251,8 +260,11 @@ export function OperationsWorkspace() {
         <article className="panel operations-error">
           <AlertTriangle size={18} />
           <div>
-            <b>Operations data unavailable</b>
+            <b>Operations refresh failed</b>
             <p>{error}</p>
+            {lastUpdated && (
+              <p>Showing data from {new Date(lastUpdated).toLocaleString()}.</p>
+            )}
           </div>
         </article>
       )}
@@ -303,30 +315,39 @@ export function OperationsWorkspace() {
             <div className="operations-search">
               <Search size={16} />
               <input
-                placeholder="Search tasks, boards, groups, status…"
+                placeholder="Search tasks, boards, groups, status..."
                 value={query}
-                onChange={(event) => setQuery(event.target.value)}
+                onChange={(event) => setFilter("query", event.target.value)}
               />
             </div>
 
-            <select value={board} onChange={(event) => setBoard(event.target.value)}>
+            <select value={board} onChange={(event) => setFilter("board", event.target.value)}>
               <option value="all">All boards</option>
               {boardNames.map((value) => (
-                <option key={value} value={value}>{value}</option>
+                <option key={value} value={value}>
+                  {value}
+                </option>
               ))}
             </select>
 
-            <select value={status} onChange={(event) => setStatus(event.target.value)}>
+            <select value={status} onChange={(event) => setFilter("status", event.target.value)}>
               <option value="all">All statuses</option>
               {statusNames.map((value) => (
-                <option key={value} value={value}>{value}</option>
+                <option key={value} value={value}>
+                  {value}
+                </option>
               ))}
             </select>
 
-            <select value={priority} onChange={(event) => setPriority(event.target.value)}>
+            <select
+              value={priority}
+              onChange={(event) => setFilter("priority", event.target.value)}
+            >
               <option value="all">All priorities</option>
               {priorityNames.map((value) => (
-                <option key={value} value={value}>{value}</option>
+                <option key={value} value={value}>
+                  {value}
+                </option>
               ))}
             </select>
           </div>
@@ -350,7 +371,9 @@ export function OperationsWorkspace() {
                   <tr key={task.external_id}>
                     <td>
                       <b>{task.title}</b>
-                      {isOverdue(task, now) && <span className="overdue-label">Overdue</span>}
+                      {isOverdue(task, now) && (
+                        <span className="overdue-label">Overdue</span>
+                      )}
                     </td>
 
                     <td>
@@ -376,7 +399,7 @@ export function OperationsWorkspace() {
                         : "No deadline"}
                     </td>
 
-                    <td>{task.assignee_ids.length || "—"}</td>
+                    <td>{task.assignee_ids.length || "-"}</td>
 
                     <td>
                       {task.url && (
@@ -411,7 +434,7 @@ export function OperationsWorkspace() {
             <h2>Boards</h2>
             <button
               className={board === "all" ? "board-filter active" : "board-filter"}
-              onClick={() => setBoard("all")}
+              onClick={() => setFilter("board", "all")}
             >
               <span>All boards</span>
               <b>{tasks.length}</b>
@@ -426,7 +449,7 @@ export function OperationsWorkspace() {
                 <button
                   key={name}
                   className={board === name ? "board-filter active" : "board-filter"}
-                  onClick={() => setBoard(name)}
+                  onClick={() => setFilter("board", name)}
                 >
                   <span>{name}</span>
                   <b>{count}</b>
@@ -460,4 +483,14 @@ export function OperationsWorkspace() {
       </div>
     </section>
   );
+
+  function setFilter(key: keyof OperationsFilters, value: string) {
+    setState((current) => ({
+      ...current,
+      filters: {
+        ...current.filters,
+        [key]: value,
+      },
+    }));
+  }
 }

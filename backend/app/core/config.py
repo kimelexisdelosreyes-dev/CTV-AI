@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     company_brain_max_history_messages: int = 4
     company_brain_max_history_chars: int = 1200
     company_brain_max_total_prompt_chars: int = 5200
+    company_brain_knowledge_timeout_seconds: float = 30.0
+    company_brain_operations_timeout_seconds: float = 30.0
+    company_brain_employee_timeout_seconds: float = 10.0
+    company_brain_history_timeout_seconds: float = 5.0
 
     ctv_ai_api_key: str = "ctv-ai-local"
     database_url: str = "postgresql+asyncpg://ctvai:ctvai_change_me@127.0.0.1:5432/ctvai"

@@ -1,9 +1,10 @@
 import { KnowledgeStats, User } from "@/lib/api";
+import { InfrastructureStatusRow } from "@/lib/infrastructure-status";
 
 type Props = {
   user: User;
   stats: KnowledgeStats | null;
-  infrastructure: Record<string, string> | null;
+  infrastructure: InfrastructureStatusRow[] | null;
 };
 
 export function Overview({ user, stats, infrastructure }: Props) {
@@ -37,12 +38,17 @@ export function Overview({ user, stats, infrastructure }: Props) {
       <div className="two-column">
         <article className="panel">
           <h2>Platform status</h2>
-          {Object.entries(infrastructure ?? {}).map(([name, value]) => (
-            <div className="status-row" key={name}>
-              <span>{name}</span>
-              <b className={value === "healthy" ? "good" : "bad"}>{value}</b>
+          {(infrastructure ?? []).map((service) => (
+            <div className="status-row" key={service.key}>
+              <span>{service.label}</span>
+              <b className={service.isHealthy ? "good" : "bad"}>
+                Status: {service.status}
+              </b>
             </div>
           ))}
+          {!infrastructure?.length && (
+            <p className="muted">Status data is unavailable.</p>
+          )}
         </article>
 
         <article className="panel">

@@ -36,6 +36,133 @@ export type KnowledgeStats = {
   categories: Record<string, number>;
 };
 
+export type KnowledgeSource = {
+  document_id: string;
+  filename: string;
+  category: string;
+  chunk_index: number;
+  page_number: number | null;
+  text: string;
+  score: number;
+};
+
+export type Personalization = {
+  applied: boolean;
+  job_title: string | null;
+  experience_level: string | null;
+  preferred_language: string | null;
+  response_style: string | null;
+  detail_level: string | null;
+  skills_used: string[];
+  tools_used: string[];
+  memories_used: number;
+  operational_context_applied: boolean;
+  operational_tasks_used: number;
+  operational_boards_used: number;
+  operational_summary: string | null;
+  routed_intent: string;
+  routing_confidence: number;
+  routed_collections: string[];
+  intelligence_sources: string[];
+  context_degraded: boolean;
+  unavailable_context_components: string[];
+  required_context_failure: string | null;
+};
+
+export type KnowledgeAskResponse = {
+  answer: string;
+  sources: KnowledgeSource[];
+  personalization: Personalization;
+  conversation_id: string | null;
+};
+
+export type Conversation = {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+};
+
+export type ConversationMessage = {
+  id: string;
+  conversation_id: string;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+};
+
+export type ConversationListResponse = {
+  conversations: Conversation[];
+  limit: number;
+  offset: number;
+  has_more: boolean;
+};
+
+export type ConversationDetailResponse = {
+  conversation: Conversation;
+  messages: ConversationMessage[];
+  limit: number;
+  offset: number;
+  has_more: boolean;
+};
+
+export type ConnectorHealth = {
+  name: string;
+  status: "healthy" | "degraded" | "unavailable" | "disabled";
+  checked_at: string;
+  latency_ms: number | null;
+  detail: string | null;
+};
+
+export type ConnectorProject = {
+  external_id: string;
+  name: string;
+  status: string | null;
+  owner_ids: string[];
+  start_at: string | null;
+  due_at: string | null;
+  url: string | null;
+  metadata: Record<string, unknown>;
+};
+
+export type ConnectorTask = {
+  external_id: string;
+  title: string;
+  status: string | null;
+  priority: string | null;
+  due_at: string | null;
+  assignee_ids: string[];
+  project_id: string | null;
+  url: string | null;
+  metadata: {
+    board_name?: string;
+    board_url?: string;
+    group_id?: string;
+    group_title?: string;
+    created_at?: string;
+    updated_at?: string;
+    [key: string]: unknown;
+  };
+};
+
+export type InfrastructureServiceDetail = {
+  status: string;
+  category?: string | null;
+  model?: string | null;
+};
+
+export type InfrastructureServiceStatus =
+  | string
+  | InfrastructureServiceDetail
+  | null;
+
+export type InfrastructureStatus = {
+  postgresql?: InfrastructureServiceStatus;
+  qdrant?: InfrastructureServiceStatus;
+  embedding?: InfrastructureServiceStatus;
+};
+
 export type DeveloperStatus = {
   enabled: boolean;
 };

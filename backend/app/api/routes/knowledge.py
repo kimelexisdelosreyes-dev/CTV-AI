@@ -259,6 +259,7 @@ async def ask(
                 current_user=current_user,
                 db=db,
                 instrumentation=instrumentation,
+                conversation_id=request.conversation_id,
             )
 
             with instrumentation.measure("response_formatting"):

@@ -12,9 +12,11 @@ from app.core.context_requirements import ContextRequirements
 REQUEST_STAGES = (
     "authentication",
     "intelligence_router",
+    "context_retrieval",
     "employee_context",
     "knowledge_retrieval",
     "operational_context",
+    "history_loading",
     "prompt_builder",
     "ollama_total",
     "response_formatting",
@@ -26,6 +28,7 @@ LEGACY_STAGE_ALIASES = {
     "intelligence_router_ms": "intelligence_router",
     "employee_context_ms": "employee_context",
     "monday_operational_context_ms": "operational_context",
+    "history_loading_ms": "history_loading",
     "prompt_assembly_ms": "prompt_builder",
     "ollama_request_ms": "ollama_total",
 }
@@ -35,6 +38,7 @@ STAGE_LEGACY_FIELDS = {
     "intelligence_router": "intelligence_router_ms",
     "employee_context": "employee_context_ms",
     "operational_context": "monday_operational_context_ms",
+    "history_loading": "history_loading_ms",
     "prompt_builder": "prompt_assembly_ms",
     "ollama_total": "ollama_request_ms",
 }
@@ -113,6 +117,8 @@ class AskPerformanceInstrumentation:
     context_requirements: dict[str, object] = field(default_factory=dict)
     prompt_components_omitted: list[str] = field(default_factory=list)
     prompt_components_truncated: list[str] = field(default_factory=list)
+    request_started_at: float = field(default_factory=perf_counter)
+    inference_started_at: float | None = None
 
     @contextmanager
     def measure(self, name: str) -> Iterator[None]:
@@ -205,6 +211,57 @@ class AskPerformanceInstrumentation:
         self.metrics["prompt_components_omitted"] = list(omitted)
         self.metrics["prompt_components_truncated"] = list(truncated)
 
+    def record_context_retrieval(
+        self,
+        *,
+        parallel_execution_used: bool,
+        component_durations_ms: dict[str, float],
+        total_retrieval_duration_ms: float,
+        required_components: list[str],
+        successful_components: list[str],
+        failed_components: list[str],
+        timed_out_components: list[str],
+        context_degraded: bool,
+        unavailable_components: list[str],
+        required_context_failure: str | None,
+    ) -> None:
+        if not self.enabled:
+            return
+
+        sequential_estimate = sum(
+            duration
+            for component, duration in component_durations_ms.items()
+            if component in successful_components
+        )
+        time_saved = max(sequential_estimate - total_retrieval_duration_ms, 0.0)
+
+        self.record_metric("retrieval_parallel_used", parallel_execution_used)
+        self.record_metric("retrieval_total_duration_ms", total_retrieval_duration_ms)
+        self.record_metric("required_context_components", list(required_components))
+        self.record_metric("successful_context_components", list(successful_components))
+        self.record_metric("failed_context_components", list(failed_components))
+        self.record_metric("timed_out_context_components", list(timed_out_components))
+        self.record_metric("context_degraded", context_degraded)
+        self.record_metric(
+            "unavailable_context_components",
+            list(unavailable_components),
+        )
+        self.record_metric("required_context_failure", required_context_failure)
+        self.record_metric("sequential_estimated_duration_ms", sequential_estimate)
+        self.record_metric("parallel_time_saved_estimate_ms", time_saved)
+
+        for component, duration_ms in component_durations_ms.items():
+            self.record_metric(f"{component}_retrieval_duration_ms", duration_ms)
+
+    def record_inference_start(self) -> None:
+        if not self.enabled:
+            return
+        self.inference_started_at = self.clock()
+        self.record_metric(
+            "inference_start_offset_ms",
+            max((self.inference_started_at - self.request_started_at) * 1000, 0.0),
+        )
+
     def record_prompt(
         self,
         messages: list[dict[str, str]],
@@ -213,6 +270,7 @@ class AskPerformanceInstrumentation:
         employee_context: str | None = None,
         knowledge_context: str | None = None,
         operational_context: str | None = None,
+        history_context: str | None = None,
         user_question: str | None = None,
     ) -> None:
         if not self.enabled:
@@ -228,6 +286,7 @@ class AskPerformanceInstrumentation:
             "employee_context_chars": employee_context,
             "knowledge_context_chars": knowledge_context,
             "operational_context_chars": operational_context,
+            "history_context_chars": history_context,
             "user_question_chars": user_question,
         }
         for metric_name, text_value in prompt_components.items():
@@ -348,6 +407,9 @@ class AskPerformanceInstrumentation:
             "embedding_ms": rounded_ms(self.durations_ms.get("embedding_ms", 0.0)),
             "qdrant_vector_search_ms": rounded_ms(
                 self.durations_ms.get("qdrant_vector_search_ms", 0.0)
+            ),
+            "history_loading_ms": rounded_ms(
+                self.durations_ms.get("history_loading_ms", 0.0)
             ),
             "prompt_assembly_ms": rounded_ms(
                 self.durations_ms.get("prompt_assembly_ms", 0.0)

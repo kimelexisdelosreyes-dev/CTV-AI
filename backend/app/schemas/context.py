@@ -23,6 +23,10 @@ class ContextMetadata(BaseModel):
     routed_collections: list[str] = Field(default_factory=list)
     intelligence_sources: list[str] = Field(default_factory=list)
 
+    context_degraded: bool = False
+    unavailable_context_components: list[str] = Field(default_factory=list)
+    required_context_failure: str | None = None
+
 
 class ContextBundle(BaseModel):
     system_context: str

@@ -14,16 +14,42 @@ import {
   apiFetch,
   clearToken,
   getToken,
+  InfrastructureStatus,
   KnowledgeStats,
+  Conversation,
+  ConversationMessage,
   User,
 } from "@/lib/api";
+import {
+  InfrastructureStatusRow,
+  normalizeInfrastructureStatus,
+} from "@/lib/infrastructure-status";
+import {
+  initialOperationsState,
+  OperationsState,
+} from "@/lib/operations-state";
+
+const ACTIVE_CONVERSATION_KEY = "ctv_company_brain_active_conversation";
+const COMPANY_BRAIN_DRAFT_KEY = "ctv_company_brain_draft";
 
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [active, setActive] = useState<Section>("overview");
   const [stats, setStats] = useState<KnowledgeStats | null>(null);
   const [infrastructure, setInfrastructure] =
-    useState<Record<string, string> | null>(null);
+    useState<InfrastructureStatusRow[] | null>(null);
+  const [activeConversationId, setActiveConversationId] =
+    useState<string | null>(null);
+  const [conversationMessages, setConversationMessages] = useState<
+    ConversationMessage[]
+  >([]);
+  const [conversationRecents, setConversationRecents] = useState<
+    Conversation[]
+  >([]);
+  const [companyBrainDraft, setCompanyBrainDraft] = useState("");
+  const [operationsState, setOperationsState] = useState<OperationsState>(
+    initialOperationsState,
+  );
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -33,15 +59,19 @@ export default function Home() {
     }
 
     try {
-      const [me, knowledge, infra] = await Promise.all([
-        apiFetch<User>("/auth/me"),
+      const me = await apiFetch<User>("/auth/me");
+      const [knowledge, infra] = await Promise.allSettled([
         apiFetch<KnowledgeStats>("/knowledge/stats"),
-        apiFetch<Record<string, string>>("/infrastructure/status"),
+        apiFetch<InfrastructureStatus>("/infrastructure/status"),
       ]);
 
       setUser(me);
-      setStats(knowledge);
-      setInfrastructure(infra);
+      setStats(knowledge.status === "fulfilled" ? knowledge.value : null);
+      setInfrastructure(
+        infra.status === "fulfilled"
+          ? normalizeInfrastructureStatus(infra.value)
+          : normalizeInfrastructureStatus(null),
+      );
     } catch {
       clearToken();
       setUser(null);
@@ -51,12 +81,45 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    load();
+    const handle = window.setTimeout(() => {
+      void load();
+    }, 0);
+    return () => window.clearTimeout(handle);
   }, [load]);
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      setActiveConversationId(
+        window.localStorage.getItem(ACTIVE_CONVERSATION_KEY),
+      );
+      setCompanyBrainDraft(
+        window.localStorage.getItem(COMPANY_BRAIN_DRAFT_KEY) ?? "",
+      );
+    }, 0);
+    return () => window.clearTimeout(handle);
+  }, []);
+
+  useEffect(() => {
+    if (activeConversationId) {
+      window.localStorage.setItem(
+        ACTIVE_CONVERSATION_KEY,
+        activeConversationId,
+      );
+    } else {
+      window.localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
+    }
+  }, [activeConversationId]);
+
+  useEffect(() => {
+    window.localStorage.setItem(COMPANY_BRAIN_DRAFT_KEY, companyBrainDraft);
+  }, [companyBrainDraft]);
 
   function logout() {
     clearToken();
     setUser(null);
+    setActiveConversationId(null);
+    setConversationMessages([]);
+    setConversationRecents([]);
   }
 
   if (loading) {
@@ -81,9 +144,26 @@ export default function Home() {
         )}
 
         {active === "assistants" && <Assistants />}
-        {active === "brain" && <CompanyBrain onStats={setStats} />}
+        {active === "brain" && (
+          <CompanyBrain
+            onStats={setStats}
+            activeConversationId={activeConversationId}
+            setActiveConversationId={setActiveConversationId}
+            messages={conversationMessages}
+            setMessages={setConversationMessages}
+            recents={conversationRecents}
+            setRecents={setConversationRecents}
+            draft={companyBrainDraft}
+            setDraft={setCompanyBrainDraft}
+          />
+        )}
         {active === "knowledge" && <KnowledgeCenter onStats={setStats} />}
-        {active === "operations" && <OperationsWorkspace />}
+        {active === "operations" && (
+          <OperationsWorkspace
+            state={operationsState}
+            setState={setOperationsState}
+          />
+        )}
 
         {active === "infrastructure" && (
           <Infrastructure data={infrastructure} user={user} />

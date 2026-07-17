@@ -120,6 +120,27 @@ async def read_conversation(
     return conversation, messages[:limit], len(messages) > limit
 
 
+async def recent_messages(
+    db: AsyncSession,
+    user: User,
+    conversation_id: uuid.UUID,
+    *,
+    limit: int,
+) -> list[ConversationMessage]:
+    conversation = await get_owned_conversation(db, user, conversation_id)
+    result = await db.execute(
+        select(ConversationMessage)
+        .where(ConversationMessage.conversation_id == conversation.id)
+        .order_by(
+            ConversationMessage.created_at.desc(),
+            ConversationMessage.id.desc(),
+        )
+        .limit(limit)
+    )
+    messages = list(result.scalars().all())
+    return list(reversed(messages))
+
+
 async def rename_conversation(
     db: AsyncSession,
     user: User,
