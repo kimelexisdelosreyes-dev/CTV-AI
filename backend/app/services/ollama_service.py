@@ -39,7 +39,8 @@ class OllamaService:
         self,
         messages: list[dict[str, str]],
         model: str | None = None,
-    ) -> str:
+        return_metadata: bool = False,
+    ) -> str | tuple[str, dict[str, object]]:
         payload = {
             "model": model or settings.ollama_model,
             "messages": messages,
@@ -64,6 +65,9 @@ class OllamaService:
 
         if not content:
             raise OllamaServiceError("Ollama returned an empty or invalid response.")
+
+        if return_metadata:
+            return content, data
 
         return content
 

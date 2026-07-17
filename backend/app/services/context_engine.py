@@ -55,7 +55,7 @@ class ContextEngine:
         ]
 
         if instrumentation:
-            with instrumentation.measure("monday_operational_context_ms"):
+            with instrumentation.measure("operational_context"):
                 operations = await operations_context_service.build(
                     question or "",
                     force=bool(route and route.use_operations),
@@ -107,6 +107,16 @@ Available enterprise connectors
 
         if operations.applied:
             system_context = f"{employee_context}\n\n{operations.text}"
+
+        if instrumentation:
+            instrumentation.record_metric(
+                "employee_context_chars",
+                len(employee_context),
+            )
+            instrumentation.record_metric(
+                "operational_context_chars",
+                len(operations.text),
+            )
 
         return ContextBundle(
             system_context=system_context,

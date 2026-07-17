@@ -1,0 +1,119 @@
+{
+  "api_root": "http://127.0.0.1:8000/api/v1",
+  "event": "company_brain_baseline_benchmark",
+  "generated_at": "2026-07-17T02:08:30.885754+00:00",
+  "prompt_count": 10,
+  "results": [
+    {
+      "answer_chars": 0,
+      "case_label": "operations_priorities",
+      "duration_seconds": 320.243,
+      "error": "HTTP 500",
+      "operational_context_applied": null,
+      "operational_tasks_used": null,
+      "source_count": 0,
+      "status_code": 500,
+      "success": false
+    },
+    {
+      "answer_chars": 1430,
+      "case_label": "overdue_tasks",
+      "duration_seconds": 232.045,
+      "error": null,
+      "operational_context_applied": true,
+      "operational_tasks_used": 12,
+      "source_count": 0,
+      "status_code": 200,
+      "success": true
+    },
+    {
+      "answer_chars": 0,
+      "case_label": "company_policy",
+      "duration_seconds": 0.238,
+      "error": "HTTP 500",
+      "operational_context_applied": null,
+      "operational_tasks_used": null,
+      "source_count": 0,
+      "status_code": 500,
+      "success": false
+    },
+    {
+      "answer_chars": 70,
+      "case_label": "equipment_manual",
+      "duration_seconds": 0.07,
+      "error": null,
+      "operational_context_applied": false,
+      "operational_tasks_used": 0,
+      "source_count": 0,
+      "status_code": 200,
+      "success": true
+    },
+    {
+      "answer_chars": 0,
+      "case_label": "production_sop",
+      "duration_seconds": 0.185,
+      "error": "HTTP 500",
+      "operational_context_applied": null,
+      "operational_tasks_used": null,
+      "source_count": 0,
+      "status_code": 500,
+      "success": false
+    },
+    {
+      "answer_chars": 0,
+      "case_label": "technical_troubleshooting",
+      "duration_seconds": 0.19,
+      "error": "HTTP 500",
+      "operational_context_applied": null,
+      "operational_tasks_used": null,
+      "source_count": 0,
+      "status_code": 500,
+      "success": false
+    },
+    {
+      "answer_chars": 0,
+      "case_label": "brand_guidance",
+      "duration_seconds": 0.183,
+      "error": "HTTP 500",
+      "operational_context_applied": null,
+      "operational_tasks_used": null,
+      "source_count": 0,
+      "status_code": 500,
+      "success": false
+    },
+    {
+      "answer_chars": 70,
+      "case_label": "mixed_operations_plus_knowledge",
+      "duration_seconds": 0.044,
+      "error": null,
+      "operational_context_applied": false,
+      "operational_tasks_used": 0,
+      "source_count": 0,
+      "status_code": 200,
+      "success": true
+    },
+    {
+      "answer_chars": 2785,
+      "case_label": "employee_context_question",
+      "duration_seconds": 249.139,
+      "error": null,
+      "operational_context_applied": true,
+      "operational_tasks_used": 12,
+      "source_count": 0,
+      "status_code": 200,
+      "success": true
+    },
+    {
+      "answer_chars": 0,
+      "case_label": "repeat_operations_priorities",
+      "duration_seconds": 318.392,
+      "error": "HTTP 500",
+      "operational_context_applied": null,
+      "operational_tasks_used": null,
+      "source_count": 0,
+      "status_code": 500,
+      "success": false
+    }
+  ],
+  "timeout_seconds": 420
+}

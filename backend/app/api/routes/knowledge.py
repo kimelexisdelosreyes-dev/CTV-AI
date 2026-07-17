@@ -1,4 +1,3 @@
-import json
 import logging
 from uuid import UUID
 
@@ -46,7 +45,7 @@ from app.services.performance_event_store import performance_event_store
 from app.services.performance_instrumentation import AskPerformanceInstrumentation
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
-logger = logging.getLogger(__name__)
+performance_logger = logging.getLogger("ctv_one.performance")
 
 
 def log_ask_performance(
@@ -55,10 +54,7 @@ def log_ask_performance(
 ) -> None:
     fields = instrumentation.to_log_fields(outcome)
     performance_event_store.record(fields)
-    logger.info(
-        "knowledge.ask.performance %s",
-        json.dumps(fields, sort_keys=True),
-    )
+    performance_logger.info(fields)
 
 
 def require_editor(user: User) -> None:
@@ -221,7 +217,7 @@ async def ask(
     instrumentation = AskPerformanceInstrumentation()
 
     try:
-        with instrumentation.measure("total_endpoint_ms"):
+        with instrumentation.measure("total_request"):
             selected = resolved_collection(
                 request.collection,
                 request.category,
@@ -238,14 +234,17 @@ async def ask(
                 instrumentation=instrumentation,
             )
 
-            response = KnowledgeAskResponse(
-                answer=answer,
-                sources=sources,
-                personalization=personalization,
-            )
-    except Exception:
+            with instrumentation.measure("response_formatting"):
+                response = KnowledgeAskResponse(
+                    answer=answer,
+                    sources=sources,
+                    personalization=personalization,
+                )
+    except Exception as exc:
+        instrumentation.mark_failure(exc)
         log_ask_performance(instrumentation, "error")
         raise
 
+    instrumentation.mark_success()
     log_ask_performance(instrumentation, "success")
     return response

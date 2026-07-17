@@ -181,3 +181,46 @@ def test_ask_response_schema_remains_unchanged(monkeypatch, caplog) -> None:
     }
     assert "do not log prompt text" not in caplog.text
     assert "do not log answer text" not in caplog.text
+
+
+def test_ask_failure_emits_structured_performance_log(monkeypatch, caplog) -> None:
+    async def fake_current_user():
+        return user()
+
+    async def fake_db():
+        yield object()
+
+    async def fake_answer_with_knowledge(**_):
+        raise RuntimeError("do not log sensitive failure context")
+
+    app.dependency_overrides[get_current_user] = fake_current_user
+    app.dependency_overrides[get_db] = fake_db
+    monkeypatch.setattr(
+        knowledge_route,
+        "answer_with_knowledge",
+        fake_answer_with_knowledge,
+    )
+    caplog.set_level(logging.INFO, logger="ctv_one.performance")
+
+    try:
+        response = TestClient(app, raise_server_exceptions=False).post(
+            "/api/v1/knowledge/ask",
+            json={"question": "do not log prompt text"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 500
+    performance_records = [
+        record.msg
+        for record in caplog.records
+        if record.name == "ctv_one.performance"
+    ]
+    assert len(performance_records) == 1
+    report = performance_records[0]
+    assert report["event"] == "company_brain_performance"
+    assert report["success"] is False
+    assert report["error_type"] == "RuntimeError"
+    assert "total_request" in report["stages"]
+    assert "do not log prompt text" not in str(report)
+    assert "sensitive failure context" not in str(report)

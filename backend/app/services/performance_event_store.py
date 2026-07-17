@@ -9,6 +9,13 @@ from typing import Any
 MAX_PERFORMANCE_EVENTS = 50
 
 SAFE_EVENT_FIELDS = {
+    "event",
+    "request_id",
+    "success",
+    "error_type",
+    "total_seconds",
+    "stages",
+    "metrics",
     "timestamp",
     "outcome",
     "routed_intent",
@@ -84,6 +91,16 @@ class PerformanceEventStore:
 
 def sanitize_event(event: dict[str, Any]) -> dict[str, Any]:
     clean = {key: event.get(key) for key in SAFE_EVENT_FIELDS}
+    clean["stages"] = {
+        key: value
+        for key, value in (event.get("stages") or {}).items()
+        if isinstance(key, str) and isinstance(value, int | float)
+    }
+    clean["metrics"] = {
+        key: value
+        for key, value in (event.get("metrics") or {}).items()
+        if isinstance(key, str) and isinstance(value, int | float)
+    }
     clean["routed_collection_searches"] = [
         {
             "collection": item.get("collection"),

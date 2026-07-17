@@ -4,6 +4,47 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from time import perf_counter
+from uuid import uuid4
+
+
+REQUEST_STAGES = (
+    "authentication",
+    "intelligence_router",
+    "employee_context",
+    "knowledge_retrieval",
+    "operational_context",
+    "prompt_builder",
+    "ollama_total",
+    "response_formatting",
+    "total_request",
+)
+
+LEGACY_STAGE_ALIASES = {
+    "total_endpoint_ms": "total_request",
+    "intelligence_router_ms": "intelligence_router",
+    "employee_context_ms": "employee_context",
+    "monday_operational_context_ms": "operational_context",
+    "prompt_assembly_ms": "prompt_builder",
+    "ollama_request_ms": "ollama_total",
+}
+
+STAGE_LEGACY_FIELDS = {
+    "total_request": "total_endpoint_ms",
+    "intelligence_router": "intelligence_router_ms",
+    "employee_context": "employee_context_ms",
+    "operational_context": "monday_operational_context_ms",
+    "prompt_builder": "prompt_assembly_ms",
+    "ollama_total": "ollama_request_ms",
+}
+
+OLLAMA_METRIC_FIELDS = (
+    "prompt_eval_count",
+    "eval_count",
+    "prompt_eval_duration",
+    "eval_duration",
+    "load_duration",
+    "total_duration",
+)
 
 
 @dataclass(frozen=True)
@@ -17,8 +58,13 @@ class CollectionSearchMetric:
 class AskPerformanceInstrumentation:
     enabled: bool = True
     clock: Callable[[], float] = perf_counter
+    request_id: str = field(default_factory=lambda: str(uuid4()))
     durations_ms: dict[str, float] = field(default_factory=dict)
+    stage_durations: dict[str, float] = field(default_factory=dict)
+    metrics: dict[str, int | float] = field(default_factory=dict)
     collection_searches: list[CollectionSearchMetric] = field(default_factory=list)
+    success: bool | None = None
+    error_type: str | None = None
     routed_intent: str | None = None
     routing_confidence: float | None = None
     collection_count: int = 0
@@ -45,8 +91,19 @@ class AskPerformanceInstrumentation:
     def add_duration(self, name: str, elapsed_seconds: float) -> None:
         if not self.enabled:
             return
+        elapsed_seconds = max(elapsed_seconds, 0.0)
         elapsed_ms = max(elapsed_seconds * 1000, 0.0)
         self.durations_ms[name] = self.durations_ms.get(name, 0.0) + elapsed_ms
+        stage_name = canonical_stage_name(name)
+        if stage_name:
+            self.stage_durations[stage_name] = (
+                self.stage_durations.get(stage_name, 0.0) + elapsed_seconds
+            )
+            legacy_name = STAGE_LEGACY_FIELDS.get(stage_name)
+            if legacy_name and legacy_name != name:
+                self.durations_ms[legacy_name] = (
+                    self.durations_ms.get(legacy_name, 0.0) + elapsed_ms
+                )
 
     def record_route(
         self,
@@ -76,12 +133,41 @@ class AskPerformanceInstrumentation:
             )
         )
 
-    def record_prompt(self, messages: list[dict[str, str]]) -> None:
+    def record_metric(self, name: str, value: int | float | None) -> None:
+        if not self.enabled or value is None:
+            return
+        self.metrics[name] = value
+
+    def record_prompt(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        system_prompt: str | None = None,
+        employee_context: str | None = None,
+        knowledge_context: str | None = None,
+        operational_context: str | None = None,
+        user_question: str | None = None,
+    ) -> None:
         if not self.enabled:
             return
         character_count = prompt_character_count(messages)
         self.prompt_character_count = character_count
         self.estimated_input_token_count = estimate_input_tokens(character_count)
+        self.metrics["final_prompt_chars"] = character_count
+        self.metrics["estimated_prompt_tokens"] = self.estimated_input_token_count
+
+        prompt_components = {
+            "system_prompt_chars": system_prompt,
+            "employee_context_chars": employee_context,
+            "knowledge_context_chars": knowledge_context,
+            "operational_context_chars": operational_context,
+            "user_question_chars": user_question,
+        }
+        for metric_name, text_value in prompt_components.items():
+            if text_value is not None:
+                self.metrics[metric_name] = len(text_value)
+            else:
+                self.metrics.setdefault(metric_name, 0)
 
     def record_answer(self, answer: str) -> None:
         if not self.enabled:
@@ -91,14 +177,82 @@ class AskPerformanceInstrumentation:
             self.answer_character_count
         )
 
+    def record_ollama_metrics(self, payload: dict[str, object] | None) -> None:
+        if not self.enabled or not isinstance(payload, dict):
+            return
+
+        for field_name in OLLAMA_METRIC_FIELDS:
+            value = payload.get(field_name)
+            if isinstance(value, int | float):
+                self.metrics[field_name] = value
+
+        eval_count = self.metrics.get("eval_count")
+        eval_duration = self.metrics.get("eval_duration")
+        if (
+            isinstance(eval_count, int | float)
+            and isinstance(eval_duration, int | float)
+            and eval_count > 0
+            and eval_duration > 0
+        ):
+            calculated = round(eval_count / (eval_duration / 1_000_000_000), 3)
+            self.metrics["calculated_tokens_per_second"] = calculated
+            self.metrics["tokens_per_second"] = calculated
+
+    def mark_success(self) -> None:
+        if not self.enabled:
+            return
+        self.success = True
+        self.error_type = None
+
+    def mark_failure(self, error: BaseException) -> None:
+        if not self.enabled:
+            return
+        self.success = False
+        self.error_type = type(error).__name__
+
     def tokens_per_second(self) -> float | None:
+        actual = self.metrics.get("calculated_tokens_per_second")
+        if isinstance(actual, int | float):
+            return rounded_ms(float(actual))
+
         ollama_ms = self.durations_ms.get("ollama_request_ms", 0.0)
         if ollama_ms <= 0 or self.estimated_output_token_count <= 0:
             return None
         return rounded_ms(self.estimated_output_token_count / (ollama_ms / 1000))
 
+    def to_report(self, outcome: str | None = None) -> dict[str, object]:
+        success = self.success
+        if success is None and outcome is not None:
+            success = outcome == "success"
+
+        metrics = dict(self.metrics)
+        metrics.setdefault("final_prompt_chars", self.prompt_character_count)
+        metrics.setdefault("estimated_prompt_tokens", self.estimated_input_token_count)
+        metrics.setdefault("estimated_output_tokens", self.estimated_output_token_count)
+        token_rate = self.tokens_per_second()
+        if token_rate is not None:
+            metrics.setdefault("tokens_per_second", token_rate)
+
+        total_seconds = self.stage_durations.get("total_request", 0.0)
+
+        return {
+            "event": "company_brain_performance",
+            "request_id": self.request_id,
+            "success": success,
+            "error_type": self.error_type,
+            "total_seconds": rounded_seconds(total_seconds),
+            "stages": {
+                stage: rounded_seconds(duration)
+                for stage, duration in self.stage_durations.items()
+                if stage in REQUEST_STAGES
+            },
+            "metrics": metrics,
+        }
+
     def to_log_fields(self, outcome: str) -> dict[str, object]:
+        report = self.to_report(outcome)
         fields: dict[str, object] = {
+            **report,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "outcome": outcome,
             "total_endpoint_ms": rounded_ms(
@@ -149,6 +303,12 @@ class AskPerformanceInstrumentation:
         return fields
 
 
+def canonical_stage_name(name: str) -> str | None:
+    if name in REQUEST_STAGES:
+        return name
+    return LEGACY_STAGE_ALIASES.get(name)
+
+
 def prompt_character_count(messages: list[dict[str, str]]) -> int:
     return sum(len(message.get("content", "")) for message in messages)
 
@@ -161,3 +321,7 @@ def estimate_input_tokens(character_count: int) -> int:
 
 def rounded_ms(value: float) -> float:
     return round(value, 3)
+
+
+def rounded_seconds(value: float) -> float:
+    return round(value, 6)

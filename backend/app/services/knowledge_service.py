@@ -212,7 +212,7 @@ async def answer_with_knowledge(
     model_override: str | None = None,
 ):
     router_timer = (
-        instrumentation.measure("intelligence_router_ms")
+        instrumentation.measure("intelligence_router")
         if instrumentation
         else nullcontext()
     )
@@ -231,12 +231,18 @@ async def answer_with_knowledge(
             routed_collections,
         )
 
-    sources = await _search_routed_collections(
-        question,
-        top_k,
-        routed_collections,
-        instrumentation,
+    retrieval_timer = (
+        instrumentation.measure("knowledge_retrieval")
+        if instrumentation
+        else nullcontext()
     )
+    with retrieval_timer:
+        sources = await _search_routed_collections(
+            question,
+            top_k,
+            routed_collections,
+            instrumentation,
+        )
     if instrumentation:
         instrumentation.retrieved_chunk_count = len(sources)
 
@@ -258,7 +264,7 @@ async def answer_with_knowledge(
 
     if use_employee_context:
         employee_context_timer = (
-            instrumentation.measure("employee_context_ms")
+            instrumentation.measure("employee_context")
             if instrumentation
             else nullcontext()
         )
@@ -290,7 +296,7 @@ async def answer_with_knowledge(
         )
 
     prompt_timer = (
-        instrumentation.measure("prompt_assembly_ms")
+        instrumentation.measure("prompt_builder")
         if instrumentation
         else nullcontext()
     )
@@ -306,40 +312,56 @@ async def answer_with_knowledge(
             ASSISTANT_PROMPTS["general"],
         ).strip()
 
+        system_prompt = (
+            f"{base_prompt}\n\n"
+            f"Routed intent: {route.intent}. "
+            f"Routing confidence: {route.confidence:.2f}. "
+            "Use only the routed sources supplied below. "
+            "Cite documents as [Source 1], [Source 2], and so on. "
+            "Cite monday.com records as [Monday Task 1], [Monday Task 2], and so on. "
+            "If the routed evidence is insufficient, say so."
+            f"{assembled_context}"
+        )
+        user_prompt = (
+            f"Question:\n{question}\n\n"
+            f"Routed Knowledge Center context:\n\n{knowledge_text}"
+        )
+
         messages = [
             {
                 "role": "system",
-                "content": (
-                    f"{base_prompt}\n\n"
-                    f"Routed intent: {route.intent}. "
-                    f"Routing confidence: {route.confidence:.2f}. "
-                    "Use only the routed sources supplied below. "
-                    "Cite documents as [Source 1], [Source 2], and so on. "
-                    "Cite monday.com records as [Monday Task 1], [Monday Task 2], and so on. "
-                    "If the routed evidence is insufficient, say so."
-                    f"{assembled_context}"
-                ),
+                "content": system_prompt,
             },
             {
                 "role": "user",
-                "content": (
-                    f"Question:\n{question}\n\n"
-                    f"Routed Knowledge Center context:\n\n{knowledge_text}"
-                ),
+                "content": user_prompt,
             },
         ]
         if instrumentation:
-            instrumentation.record_prompt(messages)
+            instrumentation.record_prompt(
+                messages,
+                system_prompt=system_prompt,
+                knowledge_context=knowledge_text,
+                user_question=question,
+            )
 
     ollama_timer = (
-        instrumentation.measure("ollama_request_ms")
+        instrumentation.measure("ollama_total")
         if instrumentation
         else nullcontext()
     )
     with ollama_timer:
         if instrumentation:
             instrumentation.model_name = model_override or settings.ollama_model
-        answer = await ollama_service.chat(messages, model=model_override)
+        if instrumentation:
+            answer, ollama_payload = await ollama_service.chat(
+                messages,
+                model=model_override,
+                return_metadata=True,
+            )
+            instrumentation.record_ollama_metrics(ollama_payload)
+        else:
+            answer = await ollama_service.chat(messages, model=model_override)
 
     if instrumentation:
         instrumentation.record_answer(answer)

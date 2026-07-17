@@ -1,0 +1,11 @@
+case_label,success,status_code,duration_seconds,error,answer_chars,source_count,operational_context_applied,operational_tasks_used
+operations_priorities,False,500,320.243,HTTP 500,0,0,,
+overdue_tasks,True,200,232.045,,1430,0,True,12
+company_policy,False,500,0.238,HTTP 500,0,0,,
+equipment_manual,True,200,0.07,,70,0,False,0
+production_sop,False,500,0.185,HTTP 500,0,0,,
+technical_troubleshooting,False,500,0.19,HTTP 500,0,0,,
+brand_guidance,False,500,0.183,HTTP 500,0,0,,
+mixed_operations_plus_knowledge,True,200,0.044,,70,0,False,0
+employee_context_question,True,200,249.139,,2785,0,True,12
+repeat_operations_priorities,False,500,318.392,HTTP 500,0,0,,
