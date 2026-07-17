@@ -16,6 +16,10 @@ class OperationsContext:
     task_count: int
     board_count: int
     summary: str | None
+    original_task_count: int = 0
+    original_chars: int = 0
+    final_chars: int = 0
+    truncated: bool = False
 
 
 def _done(status: str | None) -> bool:
@@ -45,6 +49,19 @@ def _tokens(value: str) -> set[str]:
 
 def _question_is_operational(question: str) -> bool:
     return intelligence_router.route(question).use_operations
+
+
+def _question_prefers_overdue(question: str) -> bool:
+    normalized = question.lower()
+    return any(term in normalized for term in ("overdue", "late", "past due"))
+
+
+def _cap_text(value: str, max_chars: int) -> tuple[str, bool]:
+    if max_chars <= 0 or len(value) <= max_chars:
+        return value, False
+    if max_chars <= 20:
+        return value[:max_chars], True
+    return value[: max_chars - 15].rstrip() + "\n[Truncated]", True
 
 
 def _task_score(task: ConnectorTask, question_tokens: set[str], now: datetime) -> float:
@@ -89,6 +106,7 @@ class OperationsContextService:
         question: str,
         max_tasks: int = 12,
         max_boards: int = 10,
+        max_chars: int = 0,
         force: bool = False,
     ) -> OperationsContext:
         if not force:
@@ -125,8 +143,9 @@ class OperationsContextService:
             for task in tasks
         )
 
+        candidate_tasks = overdue if _question_prefers_overdue(question) else active
         ranked = sorted(
-            active,
+            candidate_tasks,
             key=lambda task: _task_score(task, question_tokens, now),
             reverse=True,
         )[:max_tasks]
@@ -147,18 +166,18 @@ class OperationsContextService:
                 days_overdue = (now.date() - task.due_at.date()).days
 
             task_lines.append(
-                f"[Monday Task {index}] {task.title}\n"
-                f"Board: {board}\n"
-                f"Group: {group}\n"
-                f"Status: {task.status or 'Not set'}\n"
-                f"Priority: {task.priority or 'Not set'}\n"
-                f"Deadline: {due}\n"
-                f"Days overdue: {days_overdue if days_overdue is not None else 'Not overdue'}\n"
-                f"URL: {task.url or 'Not available'}"
+                f"[Monday Task {index}] {task.title} | "
+                f"ID: {task.external_id} | "
+                f"Board: {board} | "
+                f"Group: {group} | "
+                f"Status: {task.status or 'Not set'} | "
+                f"Priority: {task.priority or 'Not set'} | "
+                f"Due: {due} | "
+                f"Days overdue: {days_overdue if days_overdue is not None else 'Not overdue'}"
             )
 
         board_lines = [
-            f"- {name}: {count} task(s)"
+            f"{name}: {count}"
             for name, count in board_counts.most_common(max_boards)
         ]
 
@@ -167,33 +186,27 @@ class OperationsContextService:
             f"{len(due_today)} due today; {len(completed)} completed."
         )
 
+        summary_line = (
+            f"{len(active)} active; {len(overdue)} overdue; "
+            f"{len(due_today)} due today; {len(completed)} completed; "
+            f"{len(projects)} boards."
+        )
+        rules = (
+            "monday.com is the source of truth; cite tasks as [Monday Task 1], "
+            "[Monday Task 2]; use Days overdue as provided."
+        )
+
         text = f"""
-LIVE OPERATIONAL CONTEXT — MONDAY.COM
-
-Current UTC date
-- {now.date().isoformat()}
-
-Operational summary
-- Total tasks: {len(tasks)}
-- Active tasks: {len(active)}
-- Completed tasks: {len(completed)}
-- Overdue tasks: {len(overdue)}
-- Due today: {len(due_today)}
-- Connected boards: {len(projects)}
-
-Board workload
-{chr(10).join(board_lines) if board_lines else "- No board data"}
-
-Relevant operational items
+LIVE OPERATIONAL CONTEXT - MONDAY.COM
+UTC date: {now.date().isoformat()}
+Summary: {summary_line}
+Board workload: {'; '.join(board_lines) if board_lines else 'No board data'}
+Relevant operational items:
 {chr(10).join(task_lines) if task_lines else "- No relevant active tasks"}
-
-Rules
-- monday.com is the source of truth for operational facts.
-- Cite tasks as [Monday Task 1], [Monday Task 2], and so on.
-- Never label an old deadline as today.
-- Use the backend-computed Days overdue field.
-- Never claim that a task was modified.
+Rules: {rules}
 """.strip()
+        original_chars = len(text)
+        text, truncated = _cap_text(text, max_chars)
 
         return OperationsContext(
             applied=True,
@@ -201,6 +214,10 @@ Rules
             task_count=len(ranked),
             board_count=min(len(board_counts), max_boards),
             summary=summary,
+            original_task_count=len(candidate_tasks),
+            original_chars=original_chars,
+            final_chars=len(text),
+            truncated=truncated,
         )
 
 

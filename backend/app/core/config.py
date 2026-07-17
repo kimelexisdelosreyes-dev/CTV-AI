@@ -19,6 +19,14 @@ class Settings(BaseSettings):
     ollama_embedding_model: str = "embeddinggemma"
     ollama_num_predict: int = 768
     ollama_think: bool = False
+    company_brain_max_knowledge_chunks: int = 4
+    company_brain_max_knowledge_chars: int = 3200
+    company_brain_max_operational_tasks: int = 6
+    company_brain_max_operational_chars: int = 2200
+    company_brain_max_employee_chars: int = 900
+    company_brain_max_history_messages: int = 4
+    company_brain_max_history_chars: int = 1200
+    company_brain_max_total_prompt_chars: int = 5200
 
     ctv_ai_api_key: str = "ctv-ai-local"
     database_url: str = "postgresql+asyncpg://ctvai:ctvai_change_me@127.0.0.1:5432/ctvai"

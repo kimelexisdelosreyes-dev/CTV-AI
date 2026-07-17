@@ -102,13 +102,24 @@ def summarize_event(event: dict[str, Any] | None) -> dict[str, Any]:
         return {}
 
     metrics = event.get("metrics") or {}
+    requirements = event.get("context_requirements") or {}
     return {
         "prompt": {
+            "selected_context_types": requirements.get(
+                "selected_context_types",
+                [],
+            ),
             "final_prompt_chars": metrics.get("final_prompt_chars"),
             "estimated_prompt_tokens": metrics.get("estimated_prompt_tokens"),
             "user_question_chars": metrics.get("user_question_chars"),
             "knowledge_context_chars": metrics.get("knowledge_context_chars"),
+            "knowledge_chunks_final": metrics.get("knowledge_chunks_final"),
             "operational_context_chars": metrics.get("operational_context_chars"),
+            "operational_tasks_final": metrics.get("operational_tasks_final"),
+            "employee_context_included": requirements.get("include_employee"),
+            "prompt_budget_applied": metrics.get("prompt_budget_applied"),
+            "prompt_components_omitted": metrics.get("prompt_components_omitted"),
+            "prompt_components_truncated": metrics.get("prompt_components_truncated"),
         },
         "ollama": {
             "prompt_eval_count": metrics.get("prompt_eval_count"),

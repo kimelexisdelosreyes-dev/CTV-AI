@@ -25,6 +25,8 @@ time authentication without changing the existing dependency contract.
 Prompt metrics include character counts for the system prompt, employee context,
 knowledge context, operational context, user question, and final prompt. Token counts
 are estimated with the existing lightweight character-count approximation.
+P1.3 adds original/final context sizes, selected context types, chunk/task counts,
+and prompt-budget omission/truncation flags.
 
 Ollama metrics are recorded when the local Ollama response includes them:
 `prompt_eval_count`, `eval_count`, `prompt_eval_duration`, `eval_duration`,
@@ -80,6 +82,14 @@ $env:OLLAMA_MODEL = "qwen3:14b"
 $env:OLLAMA_EMBEDDING_MODEL = "embeddinggemma"
 $env:OLLAMA_NUM_PREDICT = "768"
 $env:OLLAMA_THINK = "false"
+$env:COMPANY_BRAIN_MAX_KNOWLEDGE_CHUNKS = "4"
+$env:COMPANY_BRAIN_MAX_KNOWLEDGE_CHARS = "3200"
+$env:COMPANY_BRAIN_MAX_OPERATIONAL_TASKS = "6"
+$env:COMPANY_BRAIN_MAX_OPERATIONAL_CHARS = "2200"
+$env:COMPANY_BRAIN_MAX_EMPLOYEE_CHARS = "900"
+$env:COMPANY_BRAIN_MAX_HISTORY_MESSAGES = "4"
+$env:COMPANY_BRAIN_MAX_HISTORY_CHARS = "1200"
+$env:COMPANY_BRAIN_MAX_TOTAL_PROMPT_CHARS = "5200"
 $env:REQUEST_TIMEOUT_SECONDS = "300"
 $env:EMBEDDING_VALIDATION_TIMEOUT_SECONDS = "10"
 $env:PERFORMANCE_LOG_PATH = "B:\CTV_AI\logs\performance.jsonl"
@@ -89,6 +99,58 @@ $env:PERFORMANCE_LOG_PATH = "B:\CTV_AI\logs\performance.jsonl"
 from the HTTP timeout; increasing the timeout is not the primary performance fix.
 `OLLAMA_THINK=false` asks supported Ollama reasoning models to return the final
 answer directly instead of spending the prediction budget on hidden thinking.
+
+## Adaptive Context Engine
+
+P1.3 centralizes context selection in `ContextRequirements`. The router decides
+whether a request needs knowledge, monday.com operations, employee context,
+conversation history, and system/company instructions. The prompt builder consumes
+that single requirement object instead of scattering context decisions across
+services.
+
+Default prompt budgets:
+
+- Knowledge chunks: 4
+- Knowledge context chars: 3200
+- Operational tasks: 6
+- Operational context chars: 2200
+- Employee context chars: 900
+- History messages: 4
+- History chars: 1200
+- Total prompt chars: 5200
+
+Route-to-context matrix:
+
+| Case | Knowledge | Operations | Employee | Notes |
+| --- | --- | --- | --- | --- |
+| `company_policy` | yes | no | no | company/HR policy collections |
+| `equipment_manual` | yes | no | no | equipment/manual aliases |
+| `production_sop` | yes | no | no | production SOP collections |
+| `technical_troubleshooting` | yes | no by default | no | operations only when current tasks are explicit |
+| `brand_guidance` | yes | no | no | brand/project reference collections |
+| `operations_priorities` | no | yes | no by default | ranked urgent/blocked/due tasks |
+| `overdue_tasks` | no | yes | no | overdue tasks only, capped |
+| `employee_context_question` | no by default | only for workload/tasks/deadlines | yes | focused role/preferences fields |
+| `mixed_operations_plus_knowledge` | yes | yes | no by default | capped knowledge plus ranked operations |
+
+Prompt sections are assembled in stable order:
+
+1. System/company instructions
+2. Knowledge context
+3. Operational context
+4. Employee context
+5. Conversation history
+6. Current question
+
+Empty sections are omitted. Knowledge chunks preserve retrieval order after exact
+duplicate suppression. Operations context ranks active tasks by overdue status,
+due date, blocked/stuck status, explicit priority, and question-token overlap.
+Overdue prompts use overdue tasks only. Employee context uses focused deterministic
+fields and does not inject the full profile/memory bundle by default.
+
+Conversation history is not currently supplied to `/knowledge/ask`, so P1.3 records
+history sizes as zero while keeping configurable caps for future chat-history
+wiring. No LLM summarization is used in this sprint.
 
 ## Supported Ollama Chat Shape
 
@@ -116,6 +178,29 @@ JSON Lines at `logs/performance.jsonl` by default. The file rotates according to
 
 Events are sanitized and must not include prompts, answers, document text, bearer
 tokens, API keys, or employee personal data.
+
+P1.3 safe metrics include:
+
+- `context_requirements`
+- `knowledge_context_original_chars`
+- `knowledge_context_final_chars`
+- `knowledge_chunks_original`
+- `knowledge_chunks_final`
+- `operational_context_original_chars`
+- `operational_context_final_chars`
+- `operational_tasks_original`
+- `operational_tasks_final`
+- `employee_context_original_chars`
+- `employee_context_final_chars`
+- `history_original_chars`
+- `history_final_chars`
+- `history_messages_original`
+- `history_messages_final`
+- `final_prompt_chars`
+- `estimated_prompt_tokens`
+- `prompt_budget_applied`
+- `prompt_components_omitted`
+- `prompt_components_truncated`
 
 ## Qdrant Category Check
 
@@ -147,7 +232,7 @@ prompt-size metrics, Ollama metadata, and structural error diagnostics when
 available. It does not print prompts, answers, task contents, employee data, or
 secrets.
 
-First-token latency is deferred to P1.3. The current Company Brain ask path uses
+First-token latency is deferred to P1.4 or later. The current Company Brain ask path uses
 non-streaming Ollama chat, so first-token latency cannot be measured truthfully
 without adding an internal streaming measurement path.
 
@@ -170,6 +255,10 @@ $env:CTV_ONE_BENCHMARK_OUTPUT_DIR = ".\benchmarks\reports"
 
 Reports are saved as JSON, CSV, and Markdown under `benchmarks/reports` by default.
 The bearer token is used only for request headers and is not written to reports.
+When `logs/performance.jsonl` contains a matching request ID, benchmark reports
+also include selected context types, final prompt chars, estimated prompt tokens,
+knowledge chunks used, operational tasks selected, employee-context inclusion,
+and prompt-budget flags. Use those columns to compare P1.2.1 and P1.3 report sets.
 
 ## Cold And Warm Baselines
 

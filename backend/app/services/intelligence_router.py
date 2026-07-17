@@ -1,6 +1,9 @@
 import re
 from dataclasses import dataclass, field
 
+from app.core.config import settings
+from app.core.context_requirements import ContextRequirements
+
 
 @dataclass(frozen=True)
 class RouteDecision:
@@ -10,6 +13,9 @@ class RouteDecision:
     use_operations: bool
     collections: list[str] = field(default_factory=list)
     sources: list[str] = field(default_factory=list)
+    context_requirements: ContextRequirements = field(
+        default_factory=ContextRequirements
+    )
 
 
 RULES: dict[str, tuple[set[str], list[str], bool]] = {
@@ -102,6 +108,120 @@ def _matches(text: str, terms: set[str]) -> int:
     return sum(1 for term in terms if f" {_normalize(term)} " in normalized)
 
 
+def _has_any(text: str, terms: set[str]) -> bool:
+    return _matches(text, terms) > 0
+
+
+EMPLOYEE_TERMS = {
+    "my role",
+    "my preferences",
+    "my preference",
+    "role and preferences",
+    "assigned to me",
+    "owner",
+    "ownership",
+    "assignee",
+    "my workload",
+    "my tasks",
+    "my projects",
+}
+
+OPERATIONAL_TERMS = {
+    "task",
+    "tasks",
+    "deadline",
+    "deadlines",
+    "due",
+    "overdue",
+    "priority",
+    "priorities",
+    "prioritize",
+    "operation",
+    "operations",
+    "operational",
+    "status",
+    "board",
+    "boards",
+    "workload",
+    "project",
+    "projects",
+    "today",
+    "tomorrow",
+    "stuck",
+    "blocked",
+    "critical",
+    "urgent",
+}
+
+KNOWLEDGE_TERMS = {
+    "approved",
+    "knowledge",
+    "policy",
+    "manual",
+    "sop",
+    "guidance",
+    "documentation",
+    "reference",
+    "sources",
+}
+
+
+def _context_requirements(
+    *,
+    question: str,
+    intent: str,
+    collections: list[str],
+    use_operations: bool,
+) -> ContextRequirements:
+    explicit_employee = _has_any(question, EMPLOYEE_TERMS)
+    explicit_operations = _has_any(question, OPERATIONAL_TERMS)
+    explicit_knowledge = _has_any(question, KNOWLEDGE_TERMS)
+
+    include_operations = use_operations
+    include_knowledge = bool(collections)
+    selected_collections = list(collections)
+
+    if use_operations and explicit_knowledge and not selected_collections:
+        include_knowledge = True
+        selected_collections = [
+            "company-policies",
+            "production-sops",
+            "technical-documentation",
+        ]
+
+    if intent == "employee":
+        include_operations = explicit_operations
+        include_knowledge = explicit_knowledge and bool(selected_collections)
+
+    include_employee = explicit_employee
+    if intent == "employee":
+        include_employee = True
+    elif intent in {"policy", "equipment", "production", "technical", "branding"}:
+        include_employee = False
+    elif intent == "operations":
+        include_employee = explicit_employee and not _has_any(
+            question,
+            {"overdue", "late", "past due"},
+        )
+
+    return ContextRequirements(
+        include_knowledge=include_knowledge,
+        include_operations=include_operations,
+        include_employee=include_employee,
+        include_history=False,
+        include_system_instructions=True,
+        knowledge_collections=selected_collections,
+        max_knowledge_chunks=settings.company_brain_max_knowledge_chunks,
+        max_knowledge_chars=settings.company_brain_max_knowledge_chars,
+        max_operational_tasks=settings.company_brain_max_operational_tasks,
+        max_operational_chars=settings.company_brain_max_operational_chars,
+        max_employee_context_chars=settings.company_brain_max_employee_chars,
+        max_history_messages=settings.company_brain_max_history_messages,
+        max_history_chars=settings.company_brain_max_history_chars,
+        max_total_prompt_chars=settings.company_brain_max_total_prompt_chars,
+    )
+
+
 class IntelligenceRouter:
     def route(self, question: str) -> RouteDecision:
         scores: list[tuple[str, int, list[str], bool]] = []
@@ -112,13 +232,20 @@ class IntelligenceRouter:
                 scores.append((intent, score, collections, operations))
 
         if not scores:
+            requirements = _context_requirements(
+                question=question,
+                intent="general",
+                collections=[],
+                use_operations=False,
+            )
             return RouteDecision(
                 intent="general",
                 confidence=0.45,
-                use_employee_context=True,
+                use_employee_context=requirements.include_employee,
                 use_operations=False,
                 collections=[],
-                sources=["employee-context", "knowledge-center"],
+                sources=requirements.selected_context_types(),
+                context_requirements=requirements,
             )
 
         scores.sort(key=lambda item: item[1], reverse=True)
@@ -141,31 +268,41 @@ class IntelligenceRouter:
             if use_operations:
                 sources.append("monday.com")
 
+            requirements = _context_requirements(
+                question=question,
+                intent="mixed",
+                collections=collections,
+                use_operations=use_operations,
+            )
             return RouteDecision(
                 intent="mixed",
                 confidence=min(0.9, 0.65 + top_score * 0.05),
-                use_employee_context=True,
-                use_operations=use_operations,
-                collections=collections,
+                use_employee_context=requirements.include_employee,
+                use_operations=requirements.include_operations,
+                collections=requirements.knowledge_collections,
                 sources=sources,
+                context_requirements=requirements,
             )
 
         intent, score, collections, use_operations = winners[0]
         confidence = min(0.98, 0.70 + score * 0.06)
 
-        sources = ["employee-context"]
-        if collections:
-            sources.append("knowledge-center")
-        if use_operations:
-            sources.append("monday.com")
+        requirements = _context_requirements(
+            question=question,
+            intent=intent,
+            collections=collections,
+            use_operations=use_operations,
+        )
+        sources = requirements.selected_context_types()
 
         return RouteDecision(
             intent=intent,
             confidence=confidence,
-            use_employee_context=True,
-            use_operations=use_operations,
-            collections=collections,
+            use_employee_context=requirements.include_employee,
+            use_operations=requirements.include_operations,
+            collections=requirements.knowledge_collections,
             sources=sources,
+            context_requirements=requirements,
         )
 
 

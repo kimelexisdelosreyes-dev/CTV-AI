@@ -2,6 +2,7 @@ import asyncio
 import uuid
 from collections import Counter
 from contextlib import nullcontext
+from dataclasses import replace
 from pathlib import Path
 
 from fastapi import UploadFile
@@ -9,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.context_requirements import ContextRequirements
 from app.core.knowledge_category_aliases import resolve_category_alias
 from app.core.prompts import ASSISTANT_PROMPTS
 from app.db.models.knowledge_document import KnowledgeDocument
@@ -21,12 +23,133 @@ from app.services.embedding_service import embedding_service
 from app.services.intelligence_router import intelligence_router
 from app.services.knowledge_jobs import process_document_job
 from app.services.ollama_service import ollama_service
+from app.services.operations_context_service import operations_context_service
 from app.services.performance_instrumentation import AskPerformanceInstrumentation
 from app.services.vector_store import vector_store
 
 
 class KnowledgeServiceError(RuntimeError):
     pass
+
+
+def _cap_text(value: str, max_chars: int) -> tuple[str, bool]:
+    if max_chars <= 0 or len(value) <= max_chars:
+        return value, False
+    if max_chars <= 20:
+        return value[:max_chars], True
+    return value[: max_chars - 15].rstrip() + "\n[Truncated]", True
+
+
+def _compact_whitespace(value: str) -> str:
+    return " ".join(value.split())
+
+
+def _knowledge_key(source: KnowledgeSource) -> str:
+    return _compact_whitespace(source.text).lower()[:500]
+
+
+def _select_knowledge_sources(
+    sources: list[KnowledgeSource],
+    requirements: ContextRequirements,
+) -> tuple[list[KnowledgeSource], str, dict[str, int], list[str]]:
+    selected: list[KnowledgeSource] = []
+    seen: set[str] = set()
+    truncated: list[str] = []
+
+    for source in sources:
+        key = _knowledge_key(source)
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(source)
+        if len(selected) >= requirements.max_knowledge_chunks:
+            break
+
+    original_text = "\n\n".join(source.text for source in selected)
+    remaining_chars = requirements.max_knowledge_chars
+    context_parts: list[str] = []
+    final_sources: list[KnowledgeSource] = []
+
+    for index, source in enumerate(selected, 1):
+        if remaining_chars <= 0:
+            break
+        page = f", page {source.page_number}" if source.page_number else ""
+        body = _compact_whitespace(source.text)
+        prefix = f"[Source {index}] {source.filename}{page}\n"
+        available = max(0, remaining_chars - len(prefix) - 2)
+        if available <= 0:
+            break
+        body, was_truncated = _cap_text(body, available)
+        if was_truncated:
+            truncated.append("knowledge")
+        part = f"{prefix}{body}"
+        context_parts.append(part)
+        final_sources.append(source)
+        remaining_chars -= len(part) + 2
+
+    text = "\n\n".join(context_parts)
+    stats = {
+        "knowledge_context_original_chars": len(original_text),
+        "knowledge_context_final_chars": len(text),
+        "knowledge_chunks_original": len(sources),
+        "knowledge_chunks_final": len(final_sources),
+    }
+    return final_sources, text, stats, truncated
+
+
+def _compose_prompt_sections(
+    sections: list[tuple[str, str]],
+) -> str:
+    return "\n\n".join(
+        f"{heading}\n{content.strip()}"
+        for heading, content in sections
+        if content.strip()
+    )
+
+
+def _apply_total_prompt_budget(
+    *,
+    system_prompt: str,
+    sections: list[tuple[str, str]],
+    question: str,
+    max_chars: int,
+) -> tuple[list[tuple[str, str]], list[str], bool]:
+    if max_chars <= 0:
+        return sections, [], False
+
+    def current_size(items: list[tuple[str, str]]) -> int:
+        user_prompt = (
+            f"Question\n{question}\n\n"
+            f"{_compose_prompt_sections(items)}"
+        )
+        return len(system_prompt) + len(user_prompt)
+
+    if current_size(sections) <= max_chars:
+        return sections, [], False
+
+    adjusted = list(sections)
+    truncated: list[str] = []
+    reduction_order = [
+        "Conversation History",
+        "Employee Context",
+        "Operational Context",
+        "Knowledge Context",
+    ]
+
+    for heading in reduction_order:
+        if current_size(adjusted) <= max_chars:
+            break
+        for index, (section_heading, content) in enumerate(adjusted):
+            if section_heading != heading or not content:
+                continue
+            overflow = current_size(adjusted) - max_chars
+            target_size = max(200, len(content) - overflow)
+            adjusted_content, was_truncated = _cap_text(content, target_size)
+            adjusted[index] = (section_heading, adjusted_content)
+            if was_truncated:
+                truncated.append(section_heading.lower().replace(" ", "_"))
+
+    return adjusted, truncated, True
 
 
 async def queue_document(upload, category, uploaded_by, db):
@@ -237,13 +360,23 @@ async def answer_with_knowledge(
     )
     with router_timer:
         route = intelligence_router.route(question)
+    requirements = route.context_requirements
 
     if category:
         routed_collections = [category]
+        requirements = replace(
+            requirements,
+            include_knowledge=True,
+            knowledge_collections=routed_collections,
+        )
     else:
-        routed_collections = route.collections
+        routed_collections = requirements.knowledge_collections
+
+    if not use_employee_context:
+        requirements = replace(requirements, include_employee=False)
 
     if instrumentation:
+        instrumentation.record_context_requirements(requirements)
         instrumentation.record_route(
             route.intent,
             route.confidence,
@@ -256,22 +389,37 @@ async def answer_with_knowledge(
         else nullcontext()
     )
     with retrieval_timer:
-        sources = await _search_routed_collections(
-            question,
-            top_k,
-            routed_collections,
-            instrumentation,
-        )
+        if requirements.include_knowledge:
+            sources = await _search_routed_collections(
+                question,
+                min(top_k, requirements.max_knowledge_chunks),
+                routed_collections,
+                instrumentation,
+            )
+        else:
+            sources = []
     if instrumentation:
         instrumentation.retrieved_chunk_count = len(sources)
 
-    approved_context: list[str] = []
-
-    for index, source in enumerate(sources, 1):
-        page = f", page {source.page_number}" if source.page_number else ""
-        approved_context.append(
-            f"[Source {index}] {source.filename}{page}\n{source.text}"
+    sources, knowledge_text, knowledge_stats, knowledge_truncated = (
+        _select_knowledge_sources(sources, requirements)
+        if requirements.include_knowledge
+        else (
+            [],
+            "",
+            {
+                "knowledge_context_original_chars": 0,
+                "knowledge_context_final_chars": 0,
+                "knowledge_chunks_original": 0,
+                "knowledge_chunks_final": 0,
+            },
+            [],
         )
+    )
+    if instrumentation:
+        for metric_name, metric_value in knowledge_stats.items():
+            instrumentation.record_metric(metric_name, metric_value)
+        instrumentation.retrieved_chunk_count = len(sources)
 
     personalization = ContextMetadata(
         routed_intent=route.intent,
@@ -279,9 +427,16 @@ async def answer_with_knowledge(
         routed_collections=routed_collections,
         intelligence_sources=route.sources,
     )
-    assembled_context = ""
+    employee_context = ""
+    operations_text = ""
+    operational_original_chars = 0
+    operational_final_chars = 0
+    operational_tasks_original = 0
+    operational_tasks_final = 0
+    prompt_truncated = list(knowledge_truncated)
+    prompt_omitted: list[str] = []
 
-    if use_employee_context:
+    if requirements.include_employee:
         employee_context_timer = (
             instrumentation.measure("employee_context")
             if instrumentation
@@ -294,15 +449,64 @@ async def answer_with_knowledge(
                 question=question,
                 route=route,
                 instrumentation=instrumentation,
+                include_operations=False,
+                max_employee_context_chars=requirements.max_employee_context_chars,
             )
-        assembled_context = f"\n\n{bundle.system_context}"
+        employee_context = bundle.system_context
         personalization = bundle.metadata
-        if instrumentation:
-            instrumentation.operational_task_count = (
-                personalization.operational_tasks_used
+    else:
+        prompt_omitted.append("employee")
+
+    if requirements.include_operations:
+        operational_context_timer = (
+            instrumentation.measure("operational_context")
+            if instrumentation
+            else nullcontext()
+        )
+        with operational_context_timer:
+            operations = await operations_context_service.build(
+                question,
+                force=True,
+                max_tasks=requirements.max_operational_tasks,
+                max_chars=requirements.max_operational_chars,
             )
+        operations_text = operations.text
+        operational_original_chars = operations.original_chars
+        operational_final_chars = operations.final_chars
+        operational_tasks_original = operations.original_task_count
+        operational_tasks_final = operations.task_count
+        personalization.operational_context_applied = operations.applied
+        personalization.operational_tasks_used = operations.task_count
+        personalization.operational_boards_used = operations.board_count
+        personalization.operational_summary = operations.summary
+        if operations.truncated:
+            prompt_truncated.append("operations")
+        if instrumentation:
+            instrumentation.operational_task_count = operations.task_count
+    else:
+        prompt_omitted.append("operations")
+
+    if not requirements.include_knowledge:
+        prompt_omitted.append("knowledge")
+    if not requirements.include_history:
+        prompt_omitted.append("history")
 
     if not sources and not personalization.operational_context_applied:
+        if requirements.include_employee:
+            pass
+        else:
+            fallback_answer = (
+                "I could not find relevant approved company knowledge for this request."
+            )
+            if instrumentation:
+                instrumentation.record_answer(fallback_answer)
+            return (
+                fallback_answer,
+                [],
+                personalization,
+            )
+
+    if requirements.include_knowledge and not sources:
         fallback_answer = (
             "I could not find relevant approved company knowledge for this request."
         )
@@ -320,30 +524,45 @@ async def answer_with_knowledge(
         else nullcontext()
     )
     with prompt_timer:
-        knowledge_text = (
-            "\n\n".join(approved_context)
-            if approved_context
-            else "No Knowledge Center documents were selected for this routed request."
-        )
-
         base_prompt = ASSISTANT_PROMPTS.get(
             assistant,
             ASSISTANT_PROMPTS["general"],
         ).strip()
 
-        system_prompt = (
-            f"{base_prompt}\n\n"
-            f"Routed intent: {route.intent}. "
-            f"Routing confidence: {route.confidence:.2f}. "
-            "Use only the routed sources supplied below. "
-            "Cite documents as [Source 1], [Source 2], and so on. "
-            "Cite monday.com records as [Monday Task 1], [Monday Task 2], and so on. "
-            "If the routed evidence is insufficient, say so."
-            f"{assembled_context}"
+        citation_rules = []
+        if knowledge_text:
+            citation_rules.append("Cite documents as [Source 1], [Source 2].")
+        if operations_text:
+            citation_rules.append(
+                "Cite monday.com records as [Monday Task 1], [Monday Task 2]."
+            )
+
+        system_prompt = "\n".join(
+            part
+            for part in (
+                base_prompt,
+                f"Routed intent: {route.intent}; confidence: {route.confidence:.2f}.",
+                "Use only the supplied context. If it is insufficient, say so.",
+                " ".join(citation_rules),
+            )
+            if part
         )
+        sections = [
+            ("Knowledge Context", knowledge_text),
+            ("Operational Context", operations_text),
+            ("Employee Context", employee_context),
+        ]
+        sections, total_truncated, budget_applied = _apply_total_prompt_budget(
+            system_prompt=system_prompt,
+            sections=sections,
+            question=question,
+            max_chars=requirements.max_total_prompt_chars,
+        )
+        prompt_truncated.extend(total_truncated)
+        context_prompt = _compose_prompt_sections(sections)
         user_prompt = (
-            f"Question:\n{question}\n\n"
-            f"Routed Knowledge Center context:\n\n{knowledge_text}"
+            f"Question\n{question}\n\n"
+            f"{context_prompt}"
         )
 
         messages = [
@@ -357,11 +576,47 @@ async def answer_with_knowledge(
             },
         ]
         if instrumentation:
+            instrumentation.record_metric(
+                "operational_context_original_chars",
+                operational_original_chars,
+            )
+            instrumentation.record_metric(
+                "operational_context_final_chars",
+                operational_final_chars,
+            )
+            instrumentation.record_metric(
+                "operational_tasks_original",
+                operational_tasks_original,
+            )
+            instrumentation.record_metric(
+                "operational_tasks_final",
+                operational_tasks_final,
+            )
+            instrumentation.record_metric("history_original_chars", 0)
+            instrumentation.record_metric("history_final_chars", 0)
+            instrumentation.record_metric("history_messages_original", 0)
+            instrumentation.record_metric("history_messages_final", 0)
             instrumentation.record_prompt(
                 messages,
                 system_prompt=system_prompt,
-                knowledge_context=knowledge_text,
+                knowledge_context=next(
+                    (content for heading, content in sections if heading == "Knowledge Context"),
+                    "",
+                ),
+                operational_context=next(
+                    (content for heading, content in sections if heading == "Operational Context"),
+                    "",
+                ),
+                employee_context=next(
+                    (content for heading, content in sections if heading == "Employee Context"),
+                    "",
+                ),
                 user_question=question,
+            )
+            instrumentation.record_prompt_budget(
+                applied=budget_applied or bool(prompt_truncated),
+                omitted=sorted(set(prompt_omitted)),
+                truncated=sorted(set(prompt_truncated)),
             )
 
     ollama_timer = (

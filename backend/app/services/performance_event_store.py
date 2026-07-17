@@ -5,7 +5,10 @@ from statistics import median
 from threading import RLock
 from typing import Any
 
-from app.services.performance_instrumentation import SAFE_DIAGNOSTIC_FIELDS
+from app.services.performance_instrumentation import (
+    SAFE_DIAGNOSTIC_FIELDS,
+    is_safe_metric_value,
+)
 
 
 MAX_PERFORMANCE_EVENTS = 50
@@ -17,6 +20,9 @@ SAFE_EVENT_FIELDS = {
     "error_type",
     "error_category",
     "error_diagnostics",
+    "context_requirements",
+    "prompt_components_omitted",
+    "prompt_components_truncated",
     "total_seconds",
     "stages",
     "metrics",
@@ -103,8 +109,23 @@ def sanitize_event(event: dict[str, Any]) -> dict[str, Any]:
     clean["metrics"] = {
         key: value
         for key, value in (event.get("metrics") or {}).items()
-        if isinstance(key, str) and isinstance(value, int | float)
+        if isinstance(key, str) and is_safe_metric_value(value)
     }
+    clean["context_requirements"] = {
+        key: value
+        for key, value in (event.get("context_requirements") or {}).items()
+        if isinstance(key, str) and is_safe_metric_value(value)
+    }
+    clean["prompt_components_omitted"] = [
+        item
+        for item in event.get("prompt_components_omitted", [])
+        if isinstance(item, str)
+    ]
+    clean["prompt_components_truncated"] = [
+        item
+        for item in event.get("prompt_components_truncated", [])
+        if isinstance(item, str)
+    ]
     clean["error_diagnostics"] = {
         key: value
         for key, value in (event.get("error_diagnostics") or {}).items()

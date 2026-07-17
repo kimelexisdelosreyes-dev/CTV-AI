@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 
 DEFAULT_TIMEOUT_SECONDS = 420
 DEFAULT_OUTPUT_DIR = Path("benchmarks") / "reports"
+DEFAULT_PERFORMANCE_LOG_PATH = Path("logs") / "performance.jsonl"
 ENDPOINT_PATH = "/api/v1/knowledge/ask"
 
 PROMPTS = [
@@ -67,6 +68,7 @@ class BenchmarkConfig:
     bearer_token: str
     timeout_seconds: float
     output_dir: Path
+    performance_log_path: Path
 
 
 def config_from_env() -> BenchmarkConfig:
@@ -81,6 +83,12 @@ def config_from_env() -> BenchmarkConfig:
         or ""
     )
     output_dir = Path(os.getenv("CTV_ONE_BENCHMARK_OUTPUT_DIR", str(DEFAULT_OUTPUT_DIR)))
+    performance_log_path = Path(
+        os.getenv(
+            "CTV_ONE_PERFORMANCE_LOG_PATH",
+            str(DEFAULT_PERFORMANCE_LOG_PATH),
+        )
+    )
 
     timeout_value = os.getenv("CTV_ONE_BENCHMARK_TIMEOUT_SECONDS", "")
     timeout_seconds = DEFAULT_TIMEOUT_SECONDS
@@ -104,6 +112,7 @@ def config_from_env() -> BenchmarkConfig:
         bearer_token=bearer_token,
         timeout_seconds=timeout_seconds,
         output_dir=output_dir,
+        performance_log_path=performance_log_path,
     )
 
 
@@ -121,6 +130,7 @@ def call_prompt(
     timeout_seconds: float,
     case_label: str,
     question: str,
+    performance_log_path: Path = DEFAULT_PERFORMANCE_LOG_PATH,
 ) -> dict[str, Any]:
     payload = {
         "question": question,
@@ -183,6 +193,12 @@ def call_prompt(
             else "generated_answer"
         )
 
+    performance_event = read_performance_event(
+        backend_request_id or "",
+        performance_log_path,
+    )
+    prompt_metrics = prompt_metrics_from_event(performance_event)
+
     return {
         "case_label": case_label,
         "success": ok,
@@ -205,6 +221,7 @@ def call_prompt(
             if isinstance(personalization, dict)
             else None
         ),
+        **prompt_metrics,
     }
 
 
@@ -220,6 +237,7 @@ def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
             config.timeout_seconds,
             case_label,
             question,
+            config.performance_log_path,
         )
         results.append(result)
         status = "ok" if result["success"] else f"failed ({result['error']})"
@@ -243,6 +261,49 @@ def result_type_for_error(error_category: str | None) -> str:
         "model_inference_malformed_response": "malformed_model_response",
         "model_inference_upstream_error": "upstream_model_error",
     }.get(error_category or "", "service_failure")
+
+
+def read_performance_event(
+    request_id: str,
+    log_path: Path,
+) -> dict[str, Any] | None:
+    if not request_id or not log_path.exists():
+        return None
+
+    try:
+        lines = log_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+
+    for line in reversed(lines):
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("request_id") == request_id:
+            return event
+    return None
+
+
+def prompt_metrics_from_event(event: dict[str, Any] | None) -> dict[str, Any]:
+    metrics = event.get("metrics") if isinstance(event, dict) else {}
+    requirements = event.get("context_requirements") if isinstance(event, dict) else {}
+    if not isinstance(metrics, dict):
+        metrics = {}
+    if not isinstance(requirements, dict):
+        requirements = {}
+
+    return {
+        "selected_context_types": requirements.get("selected_context_types", []),
+        "final_prompt_chars": metrics.get("final_prompt_chars"),
+        "estimated_prompt_tokens": metrics.get("estimated_prompt_tokens"),
+        "knowledge_chunks_used": metrics.get("knowledge_chunks_final"),
+        "operational_tasks_selected": metrics.get("operational_tasks_final"),
+        "employee_context_included": requirements.get("include_employee"),
+        "prompt_budget_applied": bool(metrics.get("prompt_budget_applied")),
+        "prompt_components_omitted": metrics.get("prompt_components_omitted", []),
+        "prompt_components_truncated": metrics.get("prompt_components_truncated", []),
+    }
 
 
 def report_paths(output_dir: Path, generated_at: str) -> dict[str, Path]:
@@ -275,6 +336,15 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
             "safe_detail",
             "backend_request_id",
             "result_type",
+            "selected_context_types",
+            "final_prompt_chars",
+            "estimated_prompt_tokens",
+            "knowledge_chunks_used",
+            "operational_tasks_selected",
+            "employee_context_included",
+            "prompt_budget_applied",
+            "prompt_components_omitted",
+            "prompt_components_truncated",
             "answer_chars",
             "source_count",
             "operational_context_applied",
@@ -294,16 +364,22 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
         f"- Timeout seconds: {report['timeout_seconds']}",
         f"- Successful requests: {successful}/{len(results)}",
         "",
-        "| Case | Result | Success | Status | Seconds | Sources | Ops tasks | Error |",
-        "| --- | --- | --- | --- | ---: | ---: | ---: | --- |",
+        "| Case | Result | Context | Prompt chars | Tokens | Budget | "
+        "Success | Status | Seconds | Sources | Ops tasks | Error |",
+        "| --- | --- | --- | ---: | ---: | --- | --- | --- | ---: | ---: | ---: | --- |",
     ]
     for result in results:
         lines.append(
-            "| {case_label} | {result_type} | {success} | {status_code} | "
+            "| {case_label} | {result_type} | {context} | {prompt_chars} | "
+            "{tokens} | {budget} | {success} | {status_code} | "
             "{duration_seconds} | {source_count} | {operational_tasks_used} | "
             "{error} |".format(
                 case_label=result.get("case_label"),
                 result_type=result.get("result_type") or "",
+                context=",".join(result.get("selected_context_types") or []),
+                prompt_chars=result.get("final_prompt_chars") or "",
+                tokens=result.get("estimated_prompt_tokens") or "",
+                budget=result.get("prompt_budget_applied") or False,
                 success=result.get("success"),
                 status_code=result.get("status_code") or "",
                 duration_seconds=result.get("duration_seconds"),

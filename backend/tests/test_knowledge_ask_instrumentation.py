@@ -93,11 +93,6 @@ async def test_non_operational_question_does_not_fetch_monday(monkeypatch) -> No
         empty_list,
     )
     monkeypatch.setattr(
-        context_engine_module.connector_manager,
-        "descriptors",
-        lambda: [],
-    )
-    monkeypatch.setattr(
         operations_context_module.connector_manager,
         "tasks",
         fail_monday_fetch,

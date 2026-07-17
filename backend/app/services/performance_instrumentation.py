@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from time import perf_counter
 from uuid import uuid4
 
+from app.core.context_requirements import ContextRequirements
+
 
 REQUEST_STAGES = (
     "authentication",
@@ -92,7 +94,7 @@ class AskPerformanceInstrumentation:
     request_id: str = field(default_factory=lambda: str(uuid4()))
     durations_ms: dict[str, float] = field(default_factory=dict)
     stage_durations: dict[str, float] = field(default_factory=dict)
-    metrics: dict[str, int | float] = field(default_factory=dict)
+    metrics: dict[str, object] = field(default_factory=dict)
     collection_searches: list[CollectionSearchMetric] = field(default_factory=list)
     success: bool | None = None
     error_type: str | None = None
@@ -108,6 +110,9 @@ class AskPerformanceInstrumentation:
     estimated_output_token_count: int = 0
     answer_character_count: int = 0
     model_name: str | None = None
+    context_requirements: dict[str, object] = field(default_factory=dict)
+    prompt_components_omitted: list[str] = field(default_factory=list)
+    prompt_components_truncated: list[str] = field(default_factory=list)
 
     @contextmanager
     def measure(self, name: str) -> Iterator[None]:
@@ -168,10 +173,37 @@ class AskPerformanceInstrumentation:
             )
         )
 
-    def record_metric(self, name: str, value: int | float | None) -> None:
+    def record_metric(self, name: str, value: object | None) -> None:
         if not self.enabled or value is None:
             return
+        if not is_safe_metric_value(value):
+            return
         self.metrics[name] = value
+
+    def record_context_requirements(
+        self,
+        requirements: ContextRequirements,
+    ) -> None:
+        if not self.enabled:
+            return
+        self.context_requirements = requirements.to_safe_dict()
+        for key, value in self.context_requirements.items():
+            self.record_metric(f"context_{key}", value)
+
+    def record_prompt_budget(
+        self,
+        *,
+        applied: bool,
+        omitted: list[str],
+        truncated: list[str],
+    ) -> None:
+        if not self.enabled:
+            return
+        self.prompt_components_omitted = list(omitted)
+        self.prompt_components_truncated = list(truncated)
+        self.metrics["prompt_budget_applied"] = int(applied)
+        self.metrics["prompt_components_omitted"] = list(omitted)
+        self.metrics["prompt_components_truncated"] = list(truncated)
 
     def record_prompt(
         self,
@@ -283,6 +315,9 @@ class AskPerformanceInstrumentation:
             "error_type": self.error_type,
             "error_category": self.error_category,
             "error_diagnostics": self.error_diagnostics,
+            "context_requirements": self.context_requirements,
+            "prompt_components_omitted": self.prompt_components_omitted,
+            "prompt_components_truncated": self.prompt_components_truncated,
             "total_seconds": rounded_seconds(total_seconds),
             "stages": {
                 stage: rounded_seconds(duration)
@@ -369,6 +404,20 @@ def rounded_ms(value: float) -> float:
 
 def rounded_seconds(value: float) -> float:
     return round(value, 6)
+
+
+def is_safe_metric_value(value: object) -> bool:
+    if isinstance(value, str | int | float | bool) or value is None:
+        return True
+    if isinstance(value, list):
+        return all(isinstance(item, str | int | float | bool) or item is None for item in value)
+    if isinstance(value, dict):
+        return all(
+            isinstance(key, str)
+            and (isinstance(item, str | int | float | bool) or item is None)
+            for key, item in value.items()
+        )
+    return False
 
 
 def safe_diagnostics(value: object) -> dict[str, object]:
