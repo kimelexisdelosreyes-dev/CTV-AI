@@ -1,4 +1,8 @@
 from app.db.models.comedy_profile import ComedyProfile  # noqa: F401
+from app.db.models.conversation import (  # noqa: F401
+    Conversation,
+    ConversationMessage,
+)
 from app.db.models.employee import (  # noqa: F401
     Department,
     EmployeeMemory,

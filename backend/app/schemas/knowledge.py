@@ -73,6 +73,7 @@ class KnowledgeAskRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=12)
     category: str | None = Field(default=None, max_length=100)
     collection: str | None = Field(default=None, max_length=100)
+    conversation_id: UUID | None = None
     assistant: Literal[
         "general",
         "production",
@@ -88,3 +89,4 @@ class KnowledgeAskResponse(BaseModel):
     answer: str
     sources: list[KnowledgeSource]
     personalization: ContextMetadata
+    conversation_id: UUID | None = None

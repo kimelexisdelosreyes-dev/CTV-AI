@@ -5,6 +5,7 @@ from app.api.routes import (
     chat,
     comedy,
     connectors,
+    conversations,
     developer,
     employee_admin,
     employees,
@@ -23,6 +24,7 @@ api_router.include_router(version.router)
 api_router.include_router(infrastructure.router)
 api_router.include_router(auth.router)
 api_router.include_router(comedy.router)
+api_router.include_router(conversations.router)
 api_router.include_router(employees.router)
 api_router.include_router(employee_admin.router)
 api_router.include_router(connectors.router)

@@ -159,7 +159,7 @@ def test_ask_response_schema_remains_unchanged(monkeypatch, caplog) -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"answer", "sources", "personalization"}
+    assert set(body) == {"answer", "sources", "personalization", "conversation_id"}
     assert set(body["personalization"]) == {
         "applied",
         "job_title",
@@ -329,3 +329,121 @@ def test_ollama_truncated_response_returns_controlled_503(monkeypatch) -> None:
     assert response.json()["detail"] == (
         "Model inference stopped before producing a usable answer."
     )
+
+
+def test_ask_persists_visible_messages_for_conversation(monkeypatch) -> None:
+    conversation_id = uuid.uuid4()
+    captured: list[tuple[str, str]] = []
+
+    async def fake_current_user():
+        return user()
+
+    async def fake_db():
+        yield object()
+
+    async def fake_append_user_message_for_request(*args):
+        captured.append(("user", args[-1]))
+
+    async def fake_append_assistant_message_for_request(*args):
+        captured.append(("assistant", args[-1]))
+
+    async def fake_answer_with_knowledge(**_):
+        return (
+            "visible answer",
+            [],
+            ContextMetadata(routed_intent="general", routing_confidence=0.45),
+        )
+
+    app.dependency_overrides[get_current_user] = fake_current_user
+    app.dependency_overrides[get_db] = fake_db
+    monkeypatch.setattr(
+        knowledge_route.conversation_service,
+        "append_user_message_for_request",
+        fake_append_user_message_for_request,
+    )
+    monkeypatch.setattr(
+        knowledge_route.conversation_service,
+        "append_assistant_message_for_request",
+        fake_append_assistant_message_for_request,
+    )
+    monkeypatch.setattr(
+        knowledge_route,
+        "answer_with_knowledge",
+        fake_answer_with_knowledge,
+    )
+
+    try:
+        response = TestClient(app).post(
+            "/api/v1/knowledge/ask",
+            json={
+                "question": "visible question",
+                "conversation_id": str(conversation_id),
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["conversation_id"] == str(conversation_id)
+    assert captured == [
+        ("user", "visible question"),
+        ("assistant", "visible answer"),
+    ]
+
+
+def test_failed_model_request_persists_safe_visible_error(monkeypatch) -> None:
+    conversation_id = uuid.uuid4()
+    captured: list[tuple[str, str]] = []
+
+    async def fake_current_user():
+        return user()
+
+    async def fake_db():
+        yield object()
+
+    async def fake_append_user_message_for_request(*args):
+        captured.append(("user", args[-1]))
+
+    async def fake_append_assistant_message_for_request(*args):
+        captured.append(("assistant", args[-1]))
+
+    async def fake_answer_with_knowledge(**_):
+        raise OllamaTruncatedResponseError(
+            diagnostics={"raw_response_chars": 100, "done_reason": "length"}
+        )
+
+    app.dependency_overrides[get_current_user] = fake_current_user
+    app.dependency_overrides[get_db] = fake_db
+    monkeypatch.setattr(
+        knowledge_route.conversation_service,
+        "append_user_message_for_request",
+        fake_append_user_message_for_request,
+    )
+    monkeypatch.setattr(
+        knowledge_route.conversation_service,
+        "append_assistant_message_for_request",
+        fake_append_assistant_message_for_request,
+    )
+    monkeypatch.setattr(
+        knowledge_route,
+        "answer_with_knowledge",
+        fake_answer_with_knowledge,
+    )
+
+    try:
+        response = TestClient(app, raise_server_exceptions=False).post(
+            "/api/v1/knowledge/ask",
+            json={
+                "question": "visible question",
+                "conversation_id": str(conversation_id),
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 503
+    assert captured == [
+        ("user", "visible question"),
+        ("assistant", "Model inference stopped before producing a usable answer."),
+    ]
+    assert "raw_response_chars" not in str(captured)

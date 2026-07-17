@@ -41,9 +41,11 @@ from app.services.knowledge_service import (
     retry_document,
     search_knowledge,
 )
+from app.services import conversation_service
 from app.services.performance_event_store import performance_event_store
 from app.services.performance_instrumentation import AskPerformanceInstrumentation
 from app.services.service_errors import CompanyBrainServiceError
+from app.services.conversation_service import ConversationNotFoundError
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 performance_logger = logging.getLogger("ctv_one.performance")
@@ -224,6 +226,7 @@ async def ask(
     db: AsyncSession = Depends(get_db),
 ):
     instrumentation = AskPerformanceInstrumentation()
+    user_message_saved = False
 
     try:
         with instrumentation.measure("total_request"):
@@ -231,6 +234,21 @@ async def ask(
                 request.collection,
                 request.category,
             )
+
+            if request.conversation_id is not None:
+                try:
+                    await conversation_service.append_user_message_for_request(
+                        db,
+                        current_user,
+                        request.conversation_id,
+                        request.question,
+                    )
+                except ConversationNotFoundError as exc:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="Conversation not found.",
+                    ) from exc
+                user_message_saved = True
 
             answer, sources, personalization = await answer_with_knowledge(
                 question=request.question,
@@ -248,8 +266,23 @@ async def ask(
                     answer=answer,
                     sources=sources,
                     personalization=personalization,
+                    conversation_id=request.conversation_id,
+                )
+            if request.conversation_id is not None:
+                await conversation_service.append_assistant_message_for_request(
+                    db,
+                    current_user,
+                    request.conversation_id,
+                    answer,
                 )
     except CompanyBrainServiceError as exc:
+        if request.conversation_id is not None and user_message_saved:
+            await conversation_service.append_assistant_message_for_request(
+                db,
+                current_user,
+                request.conversation_id,
+                exc.safe_detail,
+            )
         instrumentation.mark_failure(exc)
         log_ask_performance(instrumentation, "error")
         raise HTTPException(
