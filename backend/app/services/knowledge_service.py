@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.knowledge_category_aliases import resolve_category_alias
 from app.core.prompts import ASSISTANT_PROMPTS
 from app.db.models.knowledge_document import KnowledgeDocument
 from app.db.models.user import User
@@ -152,13 +153,26 @@ async def search_knowledge(
     with embedding_timer:
         embedding = (await embedding_service.embed([query]))[0]
 
+    merged: list[KnowledgeSource] = []
+    seen: set[tuple[str, int]] = set()
+    resolved_categories = resolve_category_alias(category)
+
     search_timer = (
         instrumentation.measure("qdrant_vector_search_ms")
         if instrumentation
         else nullcontext()
     )
     with search_timer:
-        return await vector_store.search(embedding, top_k, category)
+        for resolved_category in resolved_categories:
+            sources = await vector_store.search(embedding, top_k, resolved_category)
+            for source in sources:
+                key = (source.document_id, source.chunk_index)
+                if key not in seen:
+                    seen.add(key)
+                    merged.append(source)
+
+    merged.sort(key=lambda source: source.score, reverse=True)
+    return merged[:top_k]
 
 
 async def _search_routed_collections(
@@ -184,10 +198,15 @@ async def _search_routed_collections(
             instrumentation,
         )
         if instrumentation:
+            resolved = ",".join(
+                category or "all"
+                for category in resolve_category_alias(collection)
+            )
             instrumentation.record_collection_search(
                 collection,
                 instrumentation.clock() - started_at,
                 len(collection_sources),
+                resolved,
             )
 
         for source in collection_sources:

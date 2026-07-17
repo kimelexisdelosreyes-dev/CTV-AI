@@ -5,6 +5,7 @@ from app.services.performance_instrumentation import (
     estimate_input_tokens,
     prompt_character_count,
 )
+from app.services.service_errors import CompanyBrainServiceError
 
 
 def test_measure_records_duration_with_injected_clock() -> None:
@@ -158,7 +159,30 @@ def test_collection_search_metrics_are_safe_counts_and_timings() -> None:
     assert searches == [
         {
             "collection": "technical-documentation",
+            "resolved_collection": None,
             "duration_ms": 10.0,
             "retrieved_chunk_count": 3,
         }
     ]
+
+
+def test_failure_diagnostics_are_sanitized() -> None:
+    instrumentation = AskPerformanceInstrumentation()
+    error = CompanyBrainServiceError(
+        category="model_inference_truncated",
+        diagnostics={
+            "message_keys": ["content", "thinking"],
+            "message_content_chars": 0,
+            "raw_text": {"unsafe": "do not serialize"},
+            "answer": "secret answer text",
+        },
+    )
+
+    instrumentation.mark_failure(error)
+    fields = instrumentation.to_log_fields("error")
+
+    assert fields["error_category"] == "model_inference_truncated"
+    assert fields["error_diagnostics"]["message_keys"] == ["content", "thinking"]
+    assert fields["error_diagnostics"]["message_content_chars"] == 0
+    assert "raw_text" not in fields["error_diagnostics"]
+    assert "secret answer text" not in str(fields)

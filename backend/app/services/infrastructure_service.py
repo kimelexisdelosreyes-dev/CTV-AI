@@ -3,6 +3,7 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal
+from app.services.embedding_service import embedding_service
 
 
 async def database_status() -> str:
@@ -22,3 +23,7 @@ async def qdrant_status() -> str:
         return "healthy"
     except Exception:
         return "unavailable"
+
+
+async def embedding_status() -> dict[str, str]:
+    return await embedding_service.readiness()

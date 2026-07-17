@@ -146,15 +146,22 @@ def call_prompt(
             response_body = response.read().decode("utf-8")
             data = json.loads(response_body) if response_body else {}
             status_code = response.status
+            headers = response.headers
             ok = 200 <= status_code < 300
             error = None
     except HTTPError as exc:
         status_code = exc.code
-        data = {}
+        headers = exc.headers
+        response_body = exc.read().decode("utf-8", errors="replace")
+        try:
+            data = json.loads(response_body) if response_body else {}
+        except json.JSONDecodeError:
+            data = {}
         ok = False
         error = f"HTTP {exc.code}"
     except (URLError, TimeoutError, json.JSONDecodeError) as exc:
         status_code = None
+        headers = {}
         data = {}
         ok = False
         error = type(exc).__name__
@@ -163,6 +170,18 @@ def call_prompt(
     answer = data.get("answer") if isinstance(data, dict) else None
     sources = data.get("sources") if isinstance(data, dict) else None
     personalization = data.get("personalization") if isinstance(data, dict) else None
+    detail = data.get("detail") if isinstance(data, dict) else None
+    backend_request_id = headers.get("X-Request-ID") if headers else None
+    error_category = headers.get("X-Error-Category") if headers else None
+    result_type = headers.get("X-Result-Type") if headers else None
+    if not ok:
+        result_type = result_type_for_error(error_category)
+    elif not result_type:
+        result_type = (
+            "no_knowledge_fallback"
+            if answer == "I could not find relevant approved company knowledge for this request."
+            else "generated_answer"
+        )
 
     return {
         "case_label": case_label,
@@ -170,6 +189,10 @@ def call_prompt(
         "status_code": status_code,
         "duration_seconds": duration_seconds,
         "error": error,
+        "error_category": error_category,
+        "safe_detail": detail if isinstance(detail, str) else None,
+        "backend_request_id": backend_request_id,
+        "result_type": result_type,
         "answer_chars": len(answer) if isinstance(answer, str) else 0,
         "source_count": len(sources) if isinstance(sources, list) else 0,
         "operational_context_applied": (
@@ -212,6 +235,16 @@ def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
     }
 
 
+def result_type_for_error(error_category: str | None) -> str:
+    return {
+        "model_inference_timeout": "inference_timeout",
+        "model_inference_empty_response": "empty_model_response",
+        "model_inference_truncated": "truncated_model_response",
+        "model_inference_malformed_response": "malformed_model_response",
+        "model_inference_upstream_error": "upstream_model_error",
+    }.get(error_category or "", "service_failure")
+
+
 def report_paths(output_dir: Path, generated_at: str) -> dict[str, Path]:
     stamp = generated_at.replace(":", "").replace("+", "Z")
     return {
@@ -238,6 +271,10 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
             "status_code",
             "duration_seconds",
             "error",
+            "error_category",
+            "safe_detail",
+            "backend_request_id",
+            "result_type",
             "answer_chars",
             "source_count",
             "operational_context_applied",
@@ -257,14 +294,16 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
         f"- Timeout seconds: {report['timeout_seconds']}",
         f"- Successful requests: {successful}/{len(results)}",
         "",
-        "| Case | Success | Status | Seconds | Sources | Ops tasks | Error |",
-        "| --- | --- | --- | ---: | ---: | ---: | --- |",
+        "| Case | Result | Success | Status | Seconds | Sources | Ops tasks | Error |",
+        "| --- | --- | --- | --- | ---: | ---: | ---: | --- |",
     ]
     for result in results:
         lines.append(
-            "| {case_label} | {success} | {status_code} | {duration_seconds} | "
-            "{source_count} | {operational_tasks_used} | {error} |".format(
+            "| {case_label} | {result_type} | {success} | {status_code} | "
+            "{duration_seconds} | {source_count} | {operational_tasks_used} | "
+            "{error} |".format(
                 case_label=result.get("case_label"),
+                result_type=result.get("result_type") or "",
                 success=result.get("success"),
                 status_code=result.get("status_code") or "",
                 duration_seconds=result.get("duration_seconds"),

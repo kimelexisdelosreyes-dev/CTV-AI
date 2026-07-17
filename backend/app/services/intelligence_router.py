@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass, field
 
 
@@ -15,7 +16,8 @@ RULES: dict[str, tuple[set[str], list[str], bool]] = {
     "operations": (
         {
             "task", "tasks", "deadline", "deadlines", "due", "overdue",
-            "priority", "prioritize", "status", "board", "boards",
+            "priority", "priorities", "prioritize", "operation", "operations",
+            "operational", "status", "board", "boards",
             "workload", "project", "projects", "today", "tomorrow",
             "stuck", "blocked", "critical", "urgent", "focus",
         },
@@ -24,7 +26,7 @@ RULES: dict[str, tuple[set[str], list[str], bool]] = {
     ),
     "policy": (
         {
-            "policy", "leave", "attendance", "absence", "absent",
+            "policy", "policies", "leave", "attendance", "absence", "absent",
             "benefit", "benefits", "overtime", "holiday", "conduct",
             "discipline", "wfh", "work from home", "dress code",
         },
@@ -35,7 +37,8 @@ RULES: dict[str, tuple[set[str], list[str], bool]] = {
         {
             "camera", "sony", "fx3", "a7", "a74", "a7iv", "dji",
             "drone", "light", "lighting", "audio", "microphone",
-            "printer", "firmware", "battery", "lens",
+            "printer", "firmware", "battery", "lens", "equipment",
+            "manual", "manuals",
         },
         ["equipment-manuals", "technical-documentation"],
         False,
@@ -44,7 +47,7 @@ RULES: dict[str, tuple[set[str], list[str], bool]] = {
         {
             "shoot", "shooting", "ingest", "editing", "edit", "render",
             "archive", "delivery", "footage", "nas", "export",
-            "multicam", "backup", "production",
+            "multicam", "backup", "production", "sop", "sops",
         },
         ["production-sops", "technical-documentation"],
         False,
@@ -53,7 +56,9 @@ RULES: dict[str, tuple[set[str], list[str], bool]] = {
         {
             "brand", "branding", "logo", "font", "fonts", "color",
             "colors", "proposal", "presentation", "pitch", "tone",
-            "marketing", "visual identity",
+            "marketing", "visual identity", "brand guideline",
+            "brand guidelines", "project reference", "project references",
+            "reference", "references",
         },
         ["brand-guidelines", "project-references"],
         False,
@@ -61,7 +66,7 @@ RULES: dict[str, tuple[set[str], list[str], bool]] = {
     "training": (
         {
             "training", "tutorial", "learn", "onboarding", "guide",
-            "how do i", "how to", "teach", "lesson",
+            "how do i", "how to", "teach", "lesson", "knowledge",
         },
         ["training-materials", "equipment-manuals"],
         False,
@@ -70,7 +75,8 @@ RULES: dict[str, tuple[set[str], list[str], bool]] = {
         {
             "network", "server", "qdrant", "postgres", "ollama",
             "infrastructure", "router", "switch", "database", "api",
-            "docker", "windows", "software", "system",
+            "docker", "windows", "software", "system", "troubleshoot",
+            "troubleshooting", "technical issue", "technical issues",
         },
         ["technical-documentation"],
         False,
@@ -78,7 +84,8 @@ RULES: dict[str, tuple[set[str], list[str], bool]] = {
     "employee": (
         {
             "my workload", "my tasks", "my projects", "my skills",
-            "my tools", "my role", "my responsibilities",
+            "my tools", "my role", "my responsibilities", "preference",
+            "preferences",
         },
         [],
         True,
@@ -86,9 +93,13 @@ RULES: dict[str, tuple[set[str], list[str], bool]] = {
 }
 
 
+def _normalize(value: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", value.lower())).strip()
+
+
 def _matches(text: str, terms: set[str]) -> int:
-    lowered = text.lower()
-    return sum(1 for term in terms if term in lowered)
+    normalized = f" {_normalize(text)} "
+    return sum(1 for term in terms if f" {_normalize(term)} " in normalized)
 
 
 class IntelligenceRouter:

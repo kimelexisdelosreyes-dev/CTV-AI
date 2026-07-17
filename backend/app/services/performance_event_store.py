@@ -5,6 +5,8 @@ from statistics import median
 from threading import RLock
 from typing import Any
 
+from app.services.performance_instrumentation import SAFE_DIAGNOSTIC_FIELDS
+
 
 MAX_PERFORMANCE_EVENTS = 50
 
@@ -13,6 +15,8 @@ SAFE_EVENT_FIELDS = {
     "request_id",
     "success",
     "error_type",
+    "error_category",
+    "error_diagnostics",
     "total_seconds",
     "stages",
     "metrics",
@@ -101,9 +105,27 @@ def sanitize_event(event: dict[str, Any]) -> dict[str, Any]:
         for key, value in (event.get("metrics") or {}).items()
         if isinstance(key, str) and isinstance(value, int | float)
     }
+    clean["error_diagnostics"] = {
+        key: value
+        for key, value in (event.get("error_diagnostics") or {}).items()
+        if isinstance(key, str)
+        and key in SAFE_DIAGNOSTIC_FIELDS
+        and (
+            isinstance(value, str | int | float | bool)
+            or value is None
+            or (
+                isinstance(value, list)
+                and all(
+                    isinstance(item, str | int | float | bool) or item is None
+                    for item in value
+                )
+            )
+        )
+    }
     clean["routed_collection_searches"] = [
         {
             "collection": item.get("collection"),
+            "resolved_collection": item.get("resolved_collection"),
             "duration_ms": item.get("duration_ms"),
             "retrieved_chunk_count": item.get("retrieved_chunk_count"),
         }

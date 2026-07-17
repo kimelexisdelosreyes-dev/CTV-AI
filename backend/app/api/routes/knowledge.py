@@ -43,6 +43,7 @@ from app.services.knowledge_service import (
 )
 from app.services.performance_event_store import performance_event_store
 from app.services.performance_instrumentation import AskPerformanceInstrumentation
+from app.services.service_errors import CompanyBrainServiceError
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 performance_logger = logging.getLogger("ctv_one.performance")
@@ -196,11 +197,18 @@ async def search(
         request.collection,
         request.category,
     )
-    sources = await search_knowledge(
-        request.query,
-        request.top_k,
-        selected,
-    )
+    try:
+        sources = await search_knowledge(
+            request.query,
+            request.top_k,
+            selected,
+        )
+    except CompanyBrainServiceError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.safe_detail,
+            headers={"X-Error-Category": exc.category},
+        ) from exc
 
     return KnowledgeSearchResponse(
         query=request.query,
@@ -211,6 +219,7 @@ async def search(
 @router.post("/ask", response_model=KnowledgeAskResponse)
 async def ask(
     request: KnowledgeAskRequest,
+    http_response: Response,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -235,11 +244,22 @@ async def ask(
             )
 
             with instrumentation.measure("response_formatting"):
-                response = KnowledgeAskResponse(
+                result = KnowledgeAskResponse(
                     answer=answer,
                     sources=sources,
                     personalization=personalization,
                 )
+    except CompanyBrainServiceError as exc:
+        instrumentation.mark_failure(exc)
+        log_ask_performance(instrumentation, "error")
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.safe_detail,
+            headers={
+                "X-Request-ID": instrumentation.request_id,
+                "X-Error-Category": exc.category,
+            },
+        ) from exc
     except Exception as exc:
         instrumentation.mark_failure(exc)
         log_ask_performance(instrumentation, "error")
@@ -247,4 +267,10 @@ async def ask(
 
     instrumentation.mark_success()
     log_ask_performance(instrumentation, "success")
-    return response
+    http_response.headers["X-Request-ID"] = instrumentation.request_id
+    http_response.headers["X-Result-Type"] = (
+        "no_knowledge_fallback"
+        if not sources and not personalization.operational_context_applied
+        else "generated_answer"
+    )
+    return result

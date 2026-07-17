@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     ollama_light_model: str = "qwen3:14b"
     ollama_comedy_model: str = "qwen3:14b"
     ollama_embedding_model: str = "embeddinggemma"
+    ollama_num_predict: int = 768
+    ollama_think: bool = False
 
     ctv_ai_api_key: str = "ctv-ai-local"
     database_url: str = "postgresql+asyncpg://ctvai:ctvai_change_me@127.0.0.1:5432/ctvai"
@@ -42,6 +44,10 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 480
     log_level: str = "INFO"
     request_timeout_seconds: float = 300.0
+    embedding_validation_timeout_seconds: float = 10.0
+    performance_log_path: str = r"B:\CTV_AI\logs\performance.jsonl"
+    performance_log_max_bytes: int = 5_000_000
+    performance_log_backup_count: int = 5
 
     model_config = SettingsConfigDict(
         env_file=".env",

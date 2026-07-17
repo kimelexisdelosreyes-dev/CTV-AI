@@ -1,7 +1,16 @@
 import uuid
+
 from qdrant_client import AsyncQdrantClient, models
+
 from app.core.config import settings
 from app.schemas.knowledge import KnowledgeSource
+from app.services.service_errors import CompanyBrainServiceError
+
+
+class VectorStoreError(CompanyBrainServiceError):
+    category = "vector_store_unavailable"
+    status_code = 503
+    safe_detail = "Knowledge search is temporarily unavailable."
 
 class VectorStore:
     def __init__(self) -> None:
@@ -11,10 +20,20 @@ class VectorStore:
         if not await self.client.collection_exists(settings.knowledge_collection):
             await self.client.create_collection(
                 collection_name=settings.knowledge_collection,
-                vectors_config=models.VectorParams(size=vector_size, distance=models.Distance.COSINE),
+                vectors_config=models.VectorParams(
+                    size=vector_size,
+                    distance=models.Distance.COSINE,
+                ),
             )
 
-    async def upsert_chunks(self, document_id: str, filename: str, category: str, chunks: list, embeddings: list[list[float]]) -> None:
+    async def upsert_chunks(
+        self,
+        document_id: str,
+        filename: str,
+        category: str,
+        chunks: list,
+        embeddings: list[list[float]],
+    ) -> None:
         if not embeddings:
             return
         await self.ensure_collection(len(embeddings[0]))
@@ -58,21 +77,34 @@ class VectorStore:
             wait=True,
         )
 
-    async def search(self, query_vector: list[float], top_k: int, category: str | None = None) -> list[KnowledgeSource]:
+    async def search(
+        self,
+        query_vector: list[float],
+        top_k: int,
+        category: str | None = None,
+    ) -> list[KnowledgeSource]:
         if not await self.client.collection_exists(settings.knowledge_collection):
             return []
         query_filter = None
         if category:
             query_filter = models.Filter(
-                must=[models.FieldCondition(key="category", match=models.MatchValue(value=category))]
+                must=[
+                    models.FieldCondition(
+                        key="category",
+                        match=models.MatchValue(value=category),
+                    )
+                ]
             )
-        response = await self.client.query_points(
-            collection_name=settings.knowledge_collection,
-            query=query_vector,
-            query_filter=query_filter,
-            limit=top_k,
-            with_payload=True,
-        )
+        try:
+            response = await self.client.query_points(
+                collection_name=settings.knowledge_collection,
+                query=query_vector,
+                query_filter=query_filter,
+                limit=top_k,
+                with_payload=True,
+            )
+        except Exception as exc:
+            raise VectorStoreError() from exc
         return [
             KnowledgeSource(
                 document_id=str((point.payload or {}).get("document_id", "")),

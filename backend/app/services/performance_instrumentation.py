@@ -46,12 +46,43 @@ OLLAMA_METRIC_FIELDS = (
     "total_duration",
 )
 
+SAFE_DIAGNOSTIC_FIELDS = {
+    "http_status",
+    "content_type",
+    "json_ok",
+    "raw_response_chars",
+    "top_level_keys",
+    "message_present",
+    "message_type",
+    "message_keys",
+    "message_content_present",
+    "message_content_type",
+    "message_content_chars",
+    "message_thinking_present",
+    "message_thinking_type",
+    "message_thinking_chars",
+    "response_field_present",
+    "response_field_type",
+    "response_field_chars",
+    "done",
+    "done_reason",
+    "model",
+    "prompt_eval_count",
+    "eval_count",
+    "total_duration",
+    "load_duration",
+    "prompt_eval_duration",
+    "eval_duration",
+    "has_error",
+}
+
 
 @dataclass(frozen=True)
 class CollectionSearchMetric:
     collection: str | None
     duration_ms: float
     retrieved_chunk_count: int
+    resolved_collection: str | None = None
 
 
 @dataclass
@@ -65,6 +96,8 @@ class AskPerformanceInstrumentation:
     collection_searches: list[CollectionSearchMetric] = field(default_factory=list)
     success: bool | None = None
     error_type: str | None = None
+    error_category: str | None = None
+    error_diagnostics: dict[str, object] = field(default_factory=dict)
     routed_intent: str | None = None
     routing_confidence: float | None = None
     collection_count: int = 0
@@ -122,6 +155,7 @@ class AskPerformanceInstrumentation:
         collection: str | None,
         elapsed_seconds: float,
         retrieved_chunk_count: int,
+        resolved_collection: str | None = None,
     ) -> None:
         if not self.enabled:
             return
@@ -130,6 +164,7 @@ class AskPerformanceInstrumentation:
                 collection=collection,
                 duration_ms=max(elapsed_seconds * 1000, 0.0),
                 retrieved_chunk_count=retrieved_chunk_count,
+                resolved_collection=resolved_collection,
             )
         )
 
@@ -203,12 +238,18 @@ class AskPerformanceInstrumentation:
             return
         self.success = True
         self.error_type = None
+        self.error_category = None
+        self.error_diagnostics = {}
 
     def mark_failure(self, error: BaseException) -> None:
         if not self.enabled:
             return
         self.success = False
         self.error_type = type(error).__name__
+        self.error_category = getattr(error, "category", self.error_type)
+        self.error_diagnostics = safe_diagnostics(
+            getattr(error, "diagnostics", {})
+        )
 
     def tokens_per_second(self) -> float | None:
         actual = self.metrics.get("calculated_tokens_per_second")
@@ -240,6 +281,8 @@ class AskPerformanceInstrumentation:
             "request_id": self.request_id,
             "success": success,
             "error_type": self.error_type,
+            "error_category": self.error_category,
+            "error_diagnostics": self.error_diagnostics,
             "total_seconds": rounded_seconds(total_seconds),
             "stages": {
                 stage: rounded_seconds(duration)
@@ -294,6 +337,7 @@ class AskPerformanceInstrumentation:
             "routed_collection_searches": [
                 {
                     "collection": item.collection,
+                    "resolved_collection": item.resolved_collection,
                     "duration_ms": rounded_ms(item.duration_ms),
                     "retrieved_chunk_count": item.retrieved_chunk_count,
                 }
@@ -325,3 +369,21 @@ def rounded_ms(value: float) -> float:
 
 def rounded_seconds(value: float) -> float:
     return round(value, 6)
+
+
+def safe_diagnostics(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+
+    safe: dict[str, object] = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or key not in SAFE_DIAGNOSTIC_FIELDS:
+            continue
+        if isinstance(item, str | int | float | bool) or item is None:
+            safe[key] = item
+        elif isinstance(item, list) and all(
+            isinstance(part, str | int | float | bool) or part is None
+            for part in item
+        ):
+            safe[key] = item
+    return safe

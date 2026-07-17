@@ -1,0 +1,11 @@
+case_label,success,status_code,duration_seconds,error,error_category,safe_detail,backend_request_id,result_type,answer_chars,source_count,operational_context_applied,operational_tasks_used
+operations_priorities,True,200,54.927,,,,6f5c21fa-efae-451f-aa40-967267a1b5f0,generated_answer,701,0,True,12
+overdue_tasks,False,503,151.039,HTTP 503,model_inference_truncated,Model inference stopped before producing a usable answer.,8c80eabe-fe5e-4f93-b768-d2c2058d1190,truncated_model_response,0,0,,
+company_policy,True,200,49.994,,,,e1d315e2-9e64-4099-a3f6-632d1d8dd07b,generated_answer,1322,5,False,0
+equipment_manual,True,200,79.135,,,,6015af3a-a719-4123-9bba-f8707ca5bc53,generated_answer,1946,4,False,0
+production_sop,True,200,76.314,,,,c5911ecb-93e7-4364-807f-7fd433c9d073,generated_answer,1496,5,False,0
+technical_troubleshooting,True,200,92.063,,,,44171dc5-9dbb-4418-8797-cd5343d08667,generated_answer,2323,4,False,0
+brand_guidance,True,200,50.034,,,,43fb6c57-8316-4af8-a142-a4eae4f266bf,generated_answer,1343,4,False,0
+mixed_operations_plus_knowledge,True,200,98.857,,,,7a48ddde-f2bf-49f2-b3c9-961d0aa169d4,generated_answer,1223,0,True,12
+employee_context_question,False,503,174.884,HTTP 503,model_inference_truncated,Model inference stopped before producing a usable answer.,2a22c81a-9c7f-4811-a7cb-dc02a780d968,truncated_model_response,0,0,,
+repeat_operations_priorities,True,200,50.083,,,,4e47c3b7-0c16-412b-8540-b6bfe6720c88,generated_answer,635,0,True,12

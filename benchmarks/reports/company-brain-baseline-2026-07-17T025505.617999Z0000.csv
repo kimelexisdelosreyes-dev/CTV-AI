@@ -1,0 +1,11 @@
+case_label,success,status_code,duration_seconds,error,error_category,safe_detail,backend_request_id,result_type,answer_chars,source_count,operational_context_applied,operational_tasks_used
+operations_priorities,False,503,165.12,HTTP 503,model_inference_malformed_response,Model inference returned an invalid response.,c2991313-2cdf-44db-abef-f4b181a190dd,service_failure,0,0,,
+overdue_tasks,False,503,154.446,HTTP 503,model_inference_malformed_response,Model inference returned an invalid response.,4b58561f-5c52-41ba-a845-f8f72cb4a795,service_failure,0,0,,
+company_policy,True,200,100.154,,,,8a9f5135-473f-4687-8ed5-7411c28199fc,generated_answer,1217,5,False,0
+equipment_manual,True,200,136.762,,,,827c7cf9-ebcd-43e4-9b5b-c3c24d73c1b5,generated_answer,1887,4,False,0
+production_sop,True,200,116.622,,,,ead0d72c-0863-4325-9d20-825fadb55512,generated_answer,1174,5,False,0
+technical_troubleshooting,True,200,138.572,,,,49893ac3-77c5-40b2-acd6-29913686e9d3,generated_answer,2391,4,False,0
+brand_guidance,True,200,136.015,,,,1a639106-2ea4-4a0d-9b67-2990bd3a6baf,generated_answer,1275,4,False,0
+mixed_operations_plus_knowledge,True,200,162.702,,,,ecfc8195-8c22-46d3-8217-3059353a5763,generated_answer,1023,0,True,12
+employee_context_question,True,200,154.31,,,,0ddc69cc-3c3f-4b74-bd2a-0318ab89979e,generated_answer,1103,0,True,12
+repeat_operations_priorities,False,503,157.383,HTTP 503,model_inference_malformed_response,Model inference returned an invalid response.,1c115c68-625d-408d-9128-b4c201286cbf,service_failure,0,0,,

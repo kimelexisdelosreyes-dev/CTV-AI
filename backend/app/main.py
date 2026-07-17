@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -7,12 +8,20 @@ from app.api.router import api_router, dashboard_router, openai_router
 from app.connectors.bootstrap import register_builtin_connectors
 from app.core.config import settings
 from app.core.logging import configure_logging
+from app.services.embedding_service import embedding_service
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     configure_logging()
     register_builtin_connectors()
+    readiness = await embedding_service.readiness()
+    if readiness.get("status") != "healthy":
+        logging.getLogger(__name__).warning(
+            "embedding.readiness category=%s model=%s",
+            readiness.get("category"),
+            readiness.get("model"),
+        )
     yield
 
 

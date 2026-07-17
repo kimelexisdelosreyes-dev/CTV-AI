@@ -15,6 +15,11 @@ from app.schemas.context import ContextMetadata
 from app.services import context_engine as context_engine_module
 from app.services import operations_context_service as operations_context_module
 from app.services.knowledge_service import answer_with_knowledge
+from app.services.embedding_service import EmbeddingModelMissingError
+from app.services.ollama_service import (
+    OllamaInferenceTimeoutError,
+    OllamaTruncatedResponseError,
+)
 from app.services.performance_instrumentation import AskPerformanceInstrumentation
 
 
@@ -224,3 +229,108 @@ def test_ask_failure_emits_structured_performance_log(monkeypatch, caplog) -> No
     assert "total_request" in report["stages"]
     assert "do not log prompt text" not in str(report)
     assert "sensitive failure context" not in str(report)
+
+
+def test_known_embedding_failure_returns_controlled_503(monkeypatch, caplog) -> None:
+    async def fake_current_user():
+        return user()
+
+    async def fake_db():
+        yield object()
+
+    async def fake_answer_with_knowledge(**_):
+        raise EmbeddingModelMissingError()
+
+    app.dependency_overrides[get_current_user] = fake_current_user
+    app.dependency_overrides[get_db] = fake_db
+    monkeypatch.setattr(
+        knowledge_route,
+        "answer_with_knowledge",
+        fake_answer_with_knowledge,
+    )
+    caplog.set_level(logging.INFO, logger="ctv_one.performance")
+
+    try:
+        response = TestClient(app, raise_server_exceptions=False).post(
+            "/api/v1/knowledge/ask",
+            json={"question": "What policy applies?"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 503
+    assert response.headers["X-Error-Category"] == "embedding_model_missing"
+    assert response.headers["X-Request-ID"]
+    assert response.json()["detail"] == "The configured embedding model is not available."
+    assert "What policy applies?" not in caplog.text
+    assert "embedding_model_missing" in caplog.text
+
+
+def test_ollama_timeout_returns_controlled_504(monkeypatch) -> None:
+    async def fake_current_user():
+        return user()
+
+    async def fake_db():
+        yield object()
+
+    async def fake_answer_with_knowledge(**_):
+        raise OllamaInferenceTimeoutError()
+
+    app.dependency_overrides[get_current_user] = fake_current_user
+    app.dependency_overrides[get_db] = fake_db
+    monkeypatch.setattr(
+        knowledge_route,
+        "answer_with_knowledge",
+        fake_answer_with_knowledge,
+    )
+
+    try:
+        response = TestClient(app, raise_server_exceptions=False).post(
+            "/api/v1/knowledge/ask",
+            json={"question": "What are today's priorities?"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 504
+    assert response.headers["X-Error-Category"] == "model_inference_timeout"
+    assert response.json()["detail"] == "Model inference timed out."
+
+
+def test_ollama_truncated_response_returns_controlled_503(monkeypatch) -> None:
+    async def fake_current_user():
+        return user()
+
+    async def fake_db():
+        yield object()
+
+    async def fake_answer_with_knowledge(**_):
+        raise OllamaTruncatedResponseError(
+            diagnostics={
+                "done_reason": "length",
+                "message_content_chars": 0,
+                "message_thinking_chars": 200,
+            }
+        )
+
+    app.dependency_overrides[get_current_user] = fake_current_user
+    app.dependency_overrides[get_db] = fake_db
+    monkeypatch.setattr(
+        knowledge_route,
+        "answer_with_knowledge",
+        fake_answer_with_knowledge,
+    )
+
+    try:
+        response = TestClient(app, raise_server_exceptions=False).post(
+            "/api/v1/knowledge/ask",
+            json={"question": "What are today's priorities?"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 503
+    assert response.headers["X-Error-Category"] == "model_inference_truncated"
+    assert response.json()["detail"] == (
+        "Model inference stopped before producing a usable answer."
+    )
