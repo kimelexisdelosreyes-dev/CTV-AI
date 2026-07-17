@@ -1,4 +1,7 @@
 import logging
+import asyncio
+import json
+from time import perf_counter
 from uuid import UUID
 
 from fastapi import (
@@ -7,10 +10,12 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Request,
     Response,
     UploadFile,
     status,
 )
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user
@@ -46,6 +51,7 @@ from app.services.performance_event_store import performance_event_store
 from app.services.performance_instrumentation import AskPerformanceInstrumentation
 from app.services.service_errors import CompanyBrainServiceError
 from app.services.conversation_service import ConversationNotFoundError
+from app.services.ollama_service import ollama_service
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 performance_logger = logging.getLogger("ctv_one.performance")
@@ -58,6 +64,25 @@ def log_ask_performance(
     fields = instrumentation.to_log_fields(outcome)
     performance_event_store.record(fields)
     performance_logger.info(fields)
+
+
+def sse_event(event: str, data: dict[str, object]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, separators=(',', ':'))}\n\n"
+
+
+async def append_request_user_message(
+    db: AsyncSession,
+    user: User,
+    request: KnowledgeAskRequest,
+) -> None:
+    args = (db, user, request.conversation_id, request.question)
+    if request.client_message_id is None:
+        await conversation_service.append_user_message_for_request(*args)
+    else:
+        await conversation_service.append_user_message_for_request(
+            *args,
+            request.client_message_id,
+        )
 
 
 def require_editor(user: User) -> None:
@@ -237,12 +262,7 @@ async def ask(
 
             if request.conversation_id is not None:
                 try:
-                    await conversation_service.append_user_message_for_request(
-                        db,
-                        current_user,
-                        request.conversation_id,
-                        request.question,
-                    )
+                    await append_request_user_message(db, current_user, request)
                 except ConversationNotFoundError as exc:
                     raise HTTPException(
                         status_code=404,
@@ -308,3 +328,176 @@ async def ask(
         else "generated_answer"
     )
     return result
+
+
+@router.post("/ask/stream")
+async def ask_stream(
+    request: KnowledgeAskRequest,
+    http_request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Stream visible assistant text only; prompts and retrieved context stay server-side."""
+
+    async def event_stream():
+        instrumentation = AskPerformanceInstrumentation()
+        user_message_saved = False
+        answer_parts: list[str] = []
+        token_chunk_count = 0
+        stream_started = perf_counter()
+
+        yield sse_event(
+            "start",
+            {
+                "request_id": instrumentation.request_id,
+                "conversation_id": str(request.conversation_id)
+                if request.conversation_id
+                else None,
+            },
+        )
+
+        try:
+            with instrumentation.measure("total_request"):
+                selected = resolved_collection(request.collection, request.category)
+                if request.conversation_id is not None:
+                    try:
+                        await append_request_user_message(db, current_user, request)
+                    except ConversationNotFoundError as exc:
+                        raise CompanyBrainServiceError(
+                            category="conversation_not_found",
+                            status_code=404,
+                            safe_detail="Conversation not found.",
+                        ) from exc
+                    user_message_saved = True
+
+                prepared = await answer_with_knowledge(
+                    question=request.question,
+                    top_k=request.top_k,
+                    category=selected,
+                    assistant=request.assistant,
+                    use_employee_context=request.use_employee_context,
+                    current_user=current_user,
+                    db=db,
+                    instrumentation=instrumentation,
+                    conversation_id=request.conversation_id,
+                    prepare_for_stream=True,
+                )
+
+                instrumentation.record_stream_started()
+                instrumentation.record_context_ready()
+                yield sse_event(
+                    "context_ready",
+                    {
+                        "selected_context_types": instrumentation.metrics.get(
+                            "required_context_components", []
+                        ),
+                        "retrieval_total_duration_ms": instrumentation.metrics.get(
+                            "retrieval_total_duration_ms", 0.0
+                        ),
+                    },
+                )
+
+                if prepared.fallback_answer is not None:
+                    answer_parts.append(prepared.fallback_answer)
+                    yield sse_event("token", {"text": prepared.fallback_answer})
+                else:
+                    with instrumentation.measure("ollama_total"):
+                        instrumentation.model_name = (
+                            prepared.model_override or "configured_default"
+                        )
+                        instrumentation.record_inference_start()
+                        async for chunk in ollama_service.stream_chat(
+                            prepared.messages,
+                            model=prepared.model_override,
+                        ):
+                            if await http_request.is_disconnected():
+                                instrumentation.record_stream_completion(
+                                    token_chunk_count=token_chunk_count,
+                                    answer="".join(answer_parts),
+                                    cancelled=True,
+                                )
+                                instrumentation.mark_failure(asyncio.CancelledError())
+                                log_ask_performance(instrumentation, "cancelled")
+                                return
+                            if chunk.text:
+                                answer_parts.append(chunk.text)
+                                token_chunk_count += 1
+                                instrumentation.record_first_stream_token()
+                                yield sse_event("token", {"text": chunk.text})
+                            if chunk.done and chunk.metadata:
+                                instrumentation.record_ollama_metrics(chunk.metadata)
+
+                answer = "".join(answer_parts)
+                if not answer.strip():
+                    raise CompanyBrainServiceError(
+                        category="model_inference_empty_response",
+                        status_code=503,
+                        safe_detail="Model inference returned an empty response.",
+                    )
+                instrumentation.record_answer(answer)
+                assistant_persisted = False
+                if request.conversation_id is not None:
+                    await conversation_service.append_assistant_message_for_request(
+                        db,
+                        current_user,
+                        request.conversation_id,
+                        answer,
+                    )
+                    assistant_persisted = True
+                instrumentation.record_stream_completion(
+                    token_chunk_count=token_chunk_count,
+                    answer=answer,
+                    assistant_persisted=assistant_persisted,
+                )
+                instrumentation.mark_success()
+                log_ask_performance(instrumentation, "success")
+                yield sse_event(
+                    "done",
+                    {
+                        "answer_chars": len(answer),
+                        "first_token_latency_ms": instrumentation.metrics.get(
+                            "first_token_latency_ms"
+                        ),
+                        "duration_ms": round((perf_counter() - stream_started) * 1000, 3),
+                    },
+                )
+        except asyncio.CancelledError:
+            instrumentation.record_stream_completion(
+                token_chunk_count=token_chunk_count,
+                answer="".join(answer_parts),
+                cancelled=True,
+            )
+            instrumentation.mark_failure(asyncio.CancelledError())
+            log_ask_performance(instrumentation, "cancelled")
+            raise
+        except CompanyBrainServiceError as exc:
+            instrumentation.record_stream_completion(
+                token_chunk_count=token_chunk_count,
+                answer="".join(answer_parts),
+                error_category=exc.category,
+            )
+            instrumentation.mark_failure(exc)
+            log_ask_performance(instrumentation, "error")
+            yield sse_event(
+                "error",
+                {"error_category": exc.category, "safe_detail": exc.safe_detail},
+            )
+        except Exception:
+            error = CompanyBrainServiceError()
+            instrumentation.record_stream_completion(
+                token_chunk_count=token_chunk_count,
+                answer="".join(answer_parts),
+                error_category=error.category,
+            )
+            instrumentation.mark_failure(error)
+            log_ask_performance(instrumentation, "error")
+            yield sse_event(
+                "error",
+                {"error_category": error.category, "safe_detail": error.safe_detail},
+            )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

@@ -1,4 +1,4 @@
-const API_ROOT = "http://127.0.0.1:8000/api/v1";
+export const API_ROOT = "http://127.0.0.1:8000/api/v1";
 
 export type User = {
   email: string;
@@ -75,6 +75,65 @@ export type KnowledgeAskResponse = {
   personalization: Personalization;
   conversation_id: string | null;
 };
+
+export type KnowledgeStreamEvent =
+  | { type: "start"; request_id: string; conversation_id: string | null }
+  | {
+      type: "context_ready";
+      selected_context_types: string[];
+      retrieval_total_duration_ms: number;
+    }
+  | { type: "token"; text: string }
+  | {
+      type: "done";
+      answer_chars: number;
+      first_token_latency_ms: number | null;
+      duration_ms: number;
+    }
+  | { type: "error"; error_category: string; safe_detail: string };
+
+export type ParsedSseResult = {
+  events: KnowledgeStreamEvent[];
+  remaining: string;
+};
+
+export function parseSseEvents(
+  input: string,
+  flush = false,
+): ParsedSseResult {
+  const normalized = input.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const frames = normalized.split("\n\n");
+  let remaining = frames.pop() ?? "";
+  if (flush && remaining.trim()) {
+    frames.push(remaining);
+    remaining = "";
+  }
+
+  const events: KnowledgeStreamEvent[] = [];
+  for (const frame of frames) {
+    let eventName = "message";
+    const dataLines: string[] = [];
+    for (const line of frame.split("\n")) {
+      if (!line || line.startsWith(":")) continue;
+      const separator = line.indexOf(":");
+      const field = separator === -1 ? line : line.slice(0, separator);
+      let value = separator === -1 ? "" : line.slice(separator + 1);
+      if (value.startsWith(" ")) value = value.slice(1);
+      if (field === "event") eventName = value;
+      if (field === "data") dataLines.push(value);
+    }
+    if (!dataLines.length) continue;
+
+    let payload: object;
+    try {
+      payload = JSON.parse(dataLines.join("\n")) as object;
+    } catch {
+      throw new Error("Streaming returned an invalid response.");
+    }
+    events.push({ type: eventName, ...payload } as KnowledgeStreamEvent);
+  }
+  return { events, remaining };
+}
 
 export type Conversation = {
   id: string;
@@ -283,6 +342,44 @@ export async function apiFetch<T>(
 
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
+}
+
+export async function streamKnowledgeAsk(
+  body: object,
+  onEvent: (event: KnowledgeStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const token = getToken();
+  const response = await fetch(`${API_ROOT}/knowledge/ask/stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+    signal,
+  });
+
+  if (!response.ok || !response.body) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.detail ?? "Streaming is unavailable.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      pending += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+      const parsed = parseSseEvents(pending, done);
+      pending = parsed.remaining;
+      for (const event of parsed.events) onEvent(event);
+      if (done) return;
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 export async function login(email: string, password: string): Promise<void> {

@@ -1,6 +1,7 @@
 import json
 import logging
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -44,6 +45,22 @@ class OllamaUpstreamError(OllamaServiceError):
     safe_detail = "Model inference returned an upstream error."
 
 
+@dataclass(frozen=True)
+class OllamaStreamEvent:
+    text: str = ""
+    done: bool = False
+    metadata: dict[str, object] | None = None
+
+
+def response_text_length(response: httpx.Response | None) -> int | None:
+    if response is None:
+        return None
+    try:
+        return len(response.text)
+    except httpx.ResponseNotRead:
+        return None
+
+
 def response_diagnostics(
     *,
     response: httpx.Response | None,
@@ -62,7 +79,7 @@ def response_diagnostics(
         if response is not None
         else None,
         "json_ok": json_ok,
-        "raw_response_chars": len(response.text) if response is not None else None,
+        "raw_response_chars": response_text_length(response),
         "top_level_keys": sorted(data.keys()) if isinstance(data, dict) else [],
         "message_present": isinstance(message, dict),
         "message_type": type(message).__name__,
@@ -217,12 +234,15 @@ class OllamaService:
         self,
         messages: list[dict[str, str]],
         model: str | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[OllamaStreamEvent]:
         payload = {
             "model": model or settings.ollama_model,
             "messages": messages,
             "stream": True,
+            "think": settings.ollama_think,
         }
+        if settings.ollama_num_predict > 0:
+            payload["options"] = {"num_predict": settings.ollama_num_predict}
 
         try:
             async with httpx.AsyncClient(
@@ -230,22 +250,67 @@ class OllamaService:
                 timeout=settings.request_timeout_seconds,
             ) as client:
                 async with client.stream("POST", "/api/chat", json=payload) as response:
-                    response.raise_for_status()
+                    try:
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as exc:
+                        raise OllamaUpstreamError(
+                            diagnostics=response_diagnostics(
+                                response=response,
+                                data=None,
+                                json_ok=False,
+                                model=str(payload["model"]),
+                            )
+                        ) from exc
 
+                    received_done = False
                     async for line in response.aiter_lines():
                         if not line:
                             continue
 
-                        data = json.loads(line)
-                        content = data.get("message", {}).get("content", "")
+                        try:
+                            data = json.loads(line)
+                        except json.JSONDecodeError as exc:
+                            raise OllamaMalformedResponseError() from exc
+                        if not isinstance(data, dict):
+                            raise OllamaMalformedResponseError()
+                        diagnostics = response_diagnostics(
+                            response=response,
+                            data=data,
+                            json_ok=True,
+                            model=str(payload["model"]),
+                        )
+                        if data.get("error"):
+                            raise OllamaUpstreamError(diagnostics=diagnostics)
+
+                        message = data.get("message")
+                        if not isinstance(message, dict):
+                            raise OllamaMalformedResponseError(diagnostics=diagnostics)
+                        content = message.get("content", "")
+                        if not isinstance(content, str):
+                            raise OllamaMalformedResponseError(diagnostics=diagnostics)
+
+                        if data.get("done") is True:
+                            received_done = True
+                            done_reason = str(data.get("done_reason") or "").lower()
+                            if done_reason in {"length", "num_predict"}:
+                                raise OllamaTruncatedResponseError(diagnostics=diagnostics)
+                            if content:
+                                yield OllamaStreamEvent(text=content)
+                            yield OllamaStreamEvent(done=True, metadata=data)
+                            return
 
                         if content:
-                            yield content
-        except (httpx.HTTPError, json.JSONDecodeError) as exc:
-            logger.exception("Ollama streaming request failed")
-            raise OllamaServiceError(
-                "CTV-AI lost its connection to Ollama while streaming."
-            ) from exc
+                            yield OllamaStreamEvent(text=content)
+                    if not received_done:
+                        raise OllamaMalformedResponseError()
+        except httpx.TimeoutException as exc:
+            logger.warning("ollama.stream_timeout model=%s", payload["model"])
+            raise OllamaInferenceTimeoutError() from exc
+        except OllamaServiceError:
+            raise
+        except httpx.HTTPError as exc:
+            logger.warning("ollama.stream_failed model=%s", payload["model"])
+            raise OllamaServiceError() from exc
 
 
 ollama_service = OllamaService()

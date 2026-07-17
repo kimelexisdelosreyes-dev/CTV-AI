@@ -5,6 +5,7 @@ import {
   SetStateAction,
   useCallback,
   useEffect,
+  useRef,
   useState,
 } from "react";
 
@@ -18,6 +19,7 @@ import {
   KnowledgeStats,
   KnowledgeSource,
   Personalization,
+  streamKnowledgeAsk,
 } from "@/lib/api";
 
 type Props = {
@@ -64,6 +66,10 @@ export function CompanyBrain({
   const [recentsLoading, setRecentsLoading] = useState(false);
   const [recentsError, setRecentsError] = useState("");
   const [hasMoreRecents, setHasMoreRecents] = useState(false);
+  const [streamStatus, setStreamStatus] = useState<
+    "preparing" | "generating" | "streaming" | null
+  >(null);
+  const streamAbortController = useRef<AbortController | null>(null);
 
   const loadRecents = useCallback(
     async (offset: number) => {
@@ -138,10 +144,11 @@ export function CompanyBrain({
         setPersonalization(null);
         return;
       }
+      if (askBusy) return;
       void loadConversation(activeConversationId);
     }, 0);
     return () => window.clearTimeout(handle);
-  }, [activeConversationId, loadConversation, setMessages]);
+  }, [activeConversationId, askBusy, loadConversation, setMessages]);
 
   async function ask() {
     const question = draft.trim();
@@ -150,6 +157,7 @@ export function CompanyBrain({
     setAskBusy(true);
     setAskError("");
     setPersonalization(null);
+    setStreamStatus("preparing");
 
     let conversationId = activeConversationId;
 
@@ -162,23 +170,126 @@ export function CompanyBrain({
         conversationId = conversation.id;
         setActiveConversationId(conversation.id);
       }
+      const createdAt = new Date().toISOString();
+      const clientMessageId = crypto.randomUUID();
+      const userMessage: ConversationMessage = {
+        id: `pending-user-${clientMessageId}`,
+        conversation_id: conversationId,
+        role: "user",
+        content: question,
+        created_at: createdAt,
+      };
+      const assistantMessageId = `pending-assistant-${crypto.randomUUID()}`;
+      const assistantMessage: ConversationMessage = {
+        id: assistantMessageId,
+        conversation_id: conversationId,
+        role: "assistant",
+        content: "",
+        created_at: createdAt,
+      };
+      setMessages((current) => [...current, userMessage, assistantMessage]);
 
-      const result = await apiFetch<KnowledgeAskResponse>("/knowledge/ask", {
-        method: "POST",
-        body: JSON.stringify({
-          question,
-          top_k: 5,
-          collection: collection === "auto" ? null : collection,
-          conversation_id: conversationId,
-          assistant: "general",
-          use_employee_context: useEmployeeContext,
-        }),
-      });
-
-      setSources(result.sources);
-      setPersonalization(result.personalization);
+      const payload = {
+        question,
+        top_k: 5,
+        collection: collection === "auto" ? null : collection,
+        conversation_id: conversationId,
+        assistant: "general",
+        use_employee_context: useEmployeeContext,
+        client_message_id: clientMessageId,
+      };
+      const abortController = new AbortController();
+      streamAbortController.current = abortController;
+      let streamStarted = false;
+      let streamCompleted = false;
+      let streamFailed = false;
+      let assistantChars = 0;
+      try {
+        await streamKnowledgeAsk(
+          payload,
+          (event) => {
+            if (event.type === "start") streamStarted = true;
+            if (event.type === "context_ready") setStreamStatus("generating");
+            if (event.type === "token") {
+              if (!event.text) return;
+              assistantChars += event.text.length;
+              setStreamStatus("streaming");
+              setMessages((current) =>
+                current.map((message) =>
+                  message.id === assistantMessageId
+                    ? { ...message, content: message.content + event.text }
+                    : message,
+                ),
+              );
+            }
+            if (event.type === "done") {
+              if (event.answer_chars <= 0 || assistantChars <= 0) {
+                throw new Error("Company Brain returned an empty answer.");
+              }
+              streamCompleted = true;
+            }
+            if (event.type === "error") throw new Error(event.safe_detail);
+          },
+          abortController.signal,
+        );
+      } catch (streamError) {
+        if (abortController.signal.aborted) {
+          const stoppedMessage = "Generation stopped.";
+          streamFailed = true;
+          setAskError(stoppedMessage);
+          setMessages((current) =>
+            current.map((message) =>
+              message.id === assistantMessageId
+                ? {
+                    ...message,
+                    content: message.content
+                      ? `${message.content}\n\n[Generation stopped]`
+                      : stoppedMessage,
+                  }
+                : message,
+            ),
+          );
+        } else if (!streamStarted) {
+          const result = await apiFetch<KnowledgeAskResponse>("/knowledge/ask", {
+            method: "POST",
+            body: JSON.stringify(payload),
+          });
+          setSources(result.sources);
+          setPersonalization(result.personalization);
+          setMessages((current) =>
+            current.map((message) =>
+              message.id === assistantMessageId
+                ? { ...message, content: result.answer }
+                : message,
+            ),
+          );
+          streamCompleted = true;
+        } else {
+          const safeMessage =
+            streamError instanceof Error
+              ? streamError.message
+              : "Company Brain could not complete this answer.";
+          streamFailed = true;
+          setAskError(safeMessage);
+          setMessages((current) =>
+            current.map((message) =>
+              message.id === assistantMessageId
+                ? {
+                    ...message,
+                    content: message.content
+                      ? `${message.content}\n\n[${safeMessage}]`
+                      : safeMessage,
+                  }
+                : message,
+            ),
+          );
+        }
+      }
+      if (!streamCompleted && !streamFailed) {
+        throw new Error("Company Brain stream ended before completion.");
+      }
       setDraft("");
-      await loadConversation(conversationId);
+      if (streamCompleted) await loadConversation(conversationId);
       await loadRecents(0);
     } catch (error) {
       setAskError(
@@ -190,8 +301,14 @@ export function CompanyBrain({
         await loadConversation(conversationId).catch(console.error);
       }
     } finally {
+      streamAbortController.current = null;
+      setStreamStatus(null);
       setAskBusy(false);
     }
+  }
+
+  function stopStreaming() {
+    streamAbortController.current?.abort();
   }
 
   function startNewChat() {
@@ -319,7 +436,12 @@ export function CompanyBrain({
               {messages.map((message) => (
                 <article className={`chat-message ${message.role}`} key={message.id}>
                   <b>{message.role === "user" ? "You" : "CTV ONE"}</b>
-                  <p>{message.content}</p>
+                  <p>
+                    {message.content ||
+                      (message.role === "assistant" && askBusy
+                        ? "Generating answer..."
+                        : "")}
+                  </p>
                 </article>
               ))}
               {messages.length === 0 && (
@@ -349,8 +471,19 @@ export function CompanyBrain({
             </label>
 
             <button onClick={ask} disabled={askBusy || !draft.trim()}>
-              {askBusy ? "Routing and generating..." : "Ask Company Brain"}
+              {askBusy
+                ? streamStatus === "preparing"
+                  ? "Preparing context..."
+                  : streamStatus === "generating"
+                    ? "Generating answer..."
+                    : "Generating..."
+                : "Ask Company Brain"}
             </button>
+            {askBusy && (
+              <button onClick={stopStreaming} type="button">
+                Stop
+              </button>
+            )}
 
             {askError && <p className="error">{askError}</p>}
           </article>

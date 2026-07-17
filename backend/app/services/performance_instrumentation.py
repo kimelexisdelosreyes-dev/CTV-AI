@@ -262,6 +262,53 @@ class AskPerformanceInstrumentation:
             max((self.inference_started_at - self.request_started_at) * 1000, 0.0),
         )
 
+    def record_stream_started(self) -> None:
+        if not self.enabled:
+            return
+        self.record_metric("response_mode", "streaming")
+        self.record_metric("stream_started_at", datetime.now(timezone.utc).isoformat())
+
+    def record_context_ready(self) -> None:
+        if not self.enabled:
+            return
+        self.record_metric(
+            "context_ready_offset_ms",
+            max((self.clock() - self.request_started_at) * 1000, 0.0),
+        )
+
+    def record_first_stream_token(self) -> None:
+        if not self.enabled or "first_token_latency_ms" in self.metrics:
+            return
+        if self.inference_started_at is None:
+            return
+        self.record_metric(
+            "first_token_latency_ms",
+            max((self.clock() - self.inference_started_at) * 1000, 0.0),
+        )
+
+    def record_stream_completion(
+        self,
+        *,
+        token_chunk_count: int,
+        answer: str,
+        cancelled: bool = False,
+        error_category: str | None = None,
+        assistant_persisted: bool = False,
+    ) -> None:
+        if not self.enabled:
+            return
+        self.record_metric("token_chunk_count", token_chunk_count)
+        self.record_metric("streamed_answer_chars", len(answer))
+        self.record_metric("stream_completed", not cancelled and error_category is None)
+        self.record_metric("stream_cancelled", cancelled)
+        self.record_metric("stream_error_category", error_category)
+        self.record_metric("assistant_persisted", assistant_persisted)
+        self.record_metric("partial_assistant_saved", False)
+        self.record_metric(
+            "streaming_duration_ms",
+            max((self.clock() - self.request_started_at) * 1000, 0.0),
+        )
+
     def record_prompt(
         self,
         messages: list[dict[str, str]],

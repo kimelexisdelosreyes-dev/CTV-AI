@@ -148,6 +148,22 @@ def test_ollama_token_rate_uses_payload_metrics_when_available() -> None:
     assert instrumentation.tokens_per_second() == 10.0
 
 
+def test_stream_first_token_latency_starts_at_inference_not_request() -> None:
+    times = iter([12.25, 13.0])
+    instrumentation = AskPerformanceInstrumentation(clock=lambda: next(times))
+    instrumentation.inference_started_at = 10.0
+
+    instrumentation.record_first_stream_token()
+    instrumentation.record_stream_completion(
+        token_chunk_count=1,
+        answer="visible answer",
+    )
+
+    assert instrumentation.metrics["first_token_latency_ms"] == 2250.0
+    assert instrumentation.metrics["token_chunk_count"] == 1
+    assert instrumentation.metrics["streamed_answer_chars"] == 14
+
+
 def test_collection_search_metrics_are_safe_counts_and_timings() -> None:
     instrumentation = AskPerformanceInstrumentation()
 

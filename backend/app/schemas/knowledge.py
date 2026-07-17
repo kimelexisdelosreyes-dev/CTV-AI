@@ -74,6 +74,7 @@ class KnowledgeAskRequest(BaseModel):
     category: str | None = Field(default=None, max_length=100)
     collection: str | None = Field(default=None, max_length=100)
     conversation_id: UUID | None = None
+    client_message_id: UUID | None = None
     assistant: Literal[
         "general",
         "production",

@@ -2,7 +2,7 @@ import asyncio
 import uuid
 from collections import Counter
 from contextlib import nullcontext
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from fastapi import UploadFile
@@ -29,6 +29,15 @@ from app.services.vector_store import vector_store
 
 class KnowledgeServiceError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class PreparedKnowledgeAnswer:
+    messages: list[dict[str, str]]
+    sources: list[KnowledgeSource]
+    personalization: ContextMetadata
+    model_override: str | None
+    fallback_answer: str | None = None
 
 
 def _cap_text(value: str, max_chars: int) -> tuple[str, bool]:
@@ -352,7 +361,8 @@ async def answer_with_knowledge(
     instrumentation: AskPerformanceInstrumentation | None = None,
     model_override: str | None = None,
     conversation_id: uuid.UUID | None = None,
-):
+    prepare_for_stream: bool = False,
+) -> tuple[str, list[KnowledgeSource], ContextMetadata] | PreparedKnowledgeAnswer:
     router_timer = (
         instrumentation.measure("intelligence_router")
         if instrumentation
@@ -487,6 +497,14 @@ async def answer_with_knowledge(
             )
             if instrumentation:
                 instrumentation.record_answer(fallback_answer)
+            if prepare_for_stream:
+                return PreparedKnowledgeAnswer(
+                    messages=[],
+                    sources=[],
+                    personalization=personalization,
+                    model_override=model_override,
+                    fallback_answer=fallback_answer,
+                )
             return (
                 fallback_answer,
                 [],
@@ -499,6 +517,14 @@ async def answer_with_knowledge(
         )
         if instrumentation:
             instrumentation.record_answer(fallback_answer)
+        if prepare_for_stream:
+            return PreparedKnowledgeAnswer(
+                messages=[],
+                sources=[],
+                personalization=personalization,
+                model_override=model_override,
+                fallback_answer=fallback_answer,
+            )
         return (
             fallback_answer,
             [],
@@ -616,6 +642,14 @@ async def answer_with_knowledge(
                 omitted=sorted(set(prompt_omitted)),
                 truncated=sorted(set(prompt_truncated)),
             )
+
+    if prepare_for_stream:
+        return PreparedKnowledgeAnswer(
+            messages=messages,
+            sources=sources,
+            personalization=personalization,
+            model_override=model_override,
+        )
 
     ollama_timer = (
         instrumentation.measure("ollama_total")

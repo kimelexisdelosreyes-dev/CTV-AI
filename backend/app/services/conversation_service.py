@@ -25,6 +25,10 @@ class ConversationNotFoundError(RuntimeError):
     pass
 
 
+class ConversationMessageConflictError(RuntimeError):
+    pass
+
+
 def title_from_prompt(prompt: str | None) -> str:
     cleaned = re.sub(r"\s+", " ", (prompt or "").strip())
     if not cleaned:
@@ -185,9 +189,21 @@ async def append_message(
     *,
     role: ConversationMessageRole,
     content: str,
+    message_id: uuid.UUID | None = None,
 ) -> ConversationMessage:
     conversation = await get_owned_conversation(db, user, conversation_id)
+    if message_id is not None:
+        existing = await db.get(ConversationMessage, message_id)
+        if existing is not None:
+            if (
+                existing.conversation_id == conversation.id
+                and existing.role == role
+                and existing.content == safe_message_content(content)
+            ):
+                return existing
+            raise ConversationMessageConflictError("Client message ID is already in use.")
     message = ConversationMessage(
+        id=message_id,
         conversation_id=conversation.id,
         role=role,
         content=safe_message_content(content),
@@ -231,6 +247,7 @@ async def append_user_message_for_request(
     user: User,
     conversation_id: uuid.UUID,
     user_prompt: str,
+    client_message_id: uuid.UUID | None = None,
 ) -> None:
     await append_message(
         db,
@@ -238,6 +255,7 @@ async def append_user_message_for_request(
         conversation_id,
         role=ConversationMessageRole.user,
         content=user_prompt,
+        message_id=client_message_id,
     )
 
 

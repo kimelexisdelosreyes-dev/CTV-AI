@@ -9,6 +9,7 @@ from app.services.ollama_service import (
     OllamaTruncatedResponseError,
     OllamaUpstreamError,
     OllamaService,
+    response_diagnostics,
 )
 
 
@@ -39,6 +40,24 @@ class FakeResponse:
             "eval_count": 2,
             "eval_duration": 1_000_000_000,
         }
+
+
+def test_streaming_diagnostics_do_not_read_unconsumed_body() -> None:
+    response = httpx.Response(
+        200,
+        headers={"content-type": "application/x-ndjson"},
+        stream=httpx.ByteStream(b'{"message":{"content":"Visible"}}\n'),
+    )
+
+    diagnostics = response_diagnostics(
+        response=response,
+        data={"message": {"content": "Visible"}, "done": False},
+        json_ok=True,
+        model="test-model",
+    )
+
+    assert diagnostics["raw_response_chars"] is None
+    assert diagnostics["message_content_chars"] == 7
 
 
 @pytest.mark.anyio
