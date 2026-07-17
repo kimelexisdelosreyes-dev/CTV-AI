@@ -1,6 +1,6 @@
 import pytest
 
-from app.core.config import settings
+from app.core.config import Settings, settings
 from app.services.model_router import ModelRouter, ModelRoutingInput
 from app.services import model_router as router_module
 from app.services.ollama_service import OllamaServiceError
@@ -67,6 +67,96 @@ async def test_router_disabled_uses_existing_ollama_model(monkeypatch) -> None:
     assert decision.selected_model == "existing:latest"
     assert decision.fallback_reason == "router_disabled"
     assert decision.availability_checked is False
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("overrides", "expected_role"),
+    [
+        (
+            {
+                "question": "What tasks are due?",
+                "intent": "operations",
+                "include_knowledge": False,
+                "include_operations": True,
+            },
+            "operations",
+        ),
+        (
+            {
+                "question": "Combine tasks with policy",
+                "intent": "mixed",
+                "include_operations": True,
+            },
+            "balanced",
+        ),
+    ],
+)
+async def test_default_local_policy_uses_qwen_8b(
+    monkeypatch,
+    overrides,
+    expected_role,
+) -> None:
+    defaults = Settings(_env_file=None)
+    for field in (
+        "ctv_one_model_router_enabled",
+        "ctv_one_model_fast",
+        "ctv_one_model_balanced",
+        "ctv_one_model_reasoning",
+        "ctv_one_model_operations",
+        "ctv_one_model_knowledge",
+        "ctv_one_model_default",
+        "ollama_model",
+    ):
+        monkeypatch.setattr(settings, field, getattr(defaults, field))
+    install_models(monkeypatch, {"qwen3:8b", "deepseek-r1:14b"})
+
+    decision = await ModelRouter().route(routing_input(**overrides))
+
+    assert decision.selected_model == "qwen3:8b"
+    assert decision.model_role == expected_role
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Analyze the situation",
+        "Recommend an approach",
+        "Create a strategy",
+        "Assess the risk",
+        "Forecast next quarter",
+        "Explain the tradeoffs",
+        "Compare options for the rollout",
+        "Create a long-term plan",
+        "Make a decision",
+        "List the pros and cons",
+    ],
+)
+async def test_explicit_complex_phrases_select_reasoning(
+    monkeypatch,
+    question,
+) -> None:
+    defaults = Settings(_env_file=None)
+    monkeypatch.setattr(settings, "ctv_one_model_router_enabled", True)
+    monkeypatch.setattr(
+        settings,
+        "ctv_one_model_reasoning",
+        defaults.ctv_one_model_reasoning,
+    )
+    monkeypatch.setattr(settings, "ctv_one_model_default", "qwen3:8b")
+    install_models(monkeypatch, {"qwen3:8b", "deepseek-r1:14b"})
+
+    decision = await ModelRouter().route(
+        routing_input(
+            question=question,
+            intent="general",
+            include_knowledge=False,
+        )
+    )
+
+    assert decision.selected_model == "deepseek-r1:14b"
+    assert decision.model_role == "reasoning"
 
 
 @pytest.mark.anyio
@@ -176,10 +266,10 @@ async def test_explicit_model_is_preserved_without_availability_call(monkeypatch
     monkeypatch.setattr(router_module.ollama_service, "list_models", unexpected_list)
 
     decision = await ModelRouter().route(
-        routing_input(explicit_model="developer-choice:latest")
+        routing_input(explicit_model="qwen3:14b")
     )
 
-    assert decision.selected_model == "developer-choice:latest"
+    assert decision.selected_model == "qwen3:14b"
     assert decision.model_role == "explicit"
     assert decision.fallback_used is False
 

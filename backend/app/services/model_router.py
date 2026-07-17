@@ -51,7 +51,10 @@ COMPLEX_TERMS = {
     "risks",
     "tradeoff",
     "tradeoffs",
-    "why",
+    "compare options",
+    "long term plan",
+    "decision",
+    "pros and cons",
     "executive summary",
     "scenario",
 }
@@ -125,7 +128,7 @@ class ModelRouter:
         mixed_context = (
             routing_input.include_knowledge and routing_input.include_operations
         )
-        if complexity == "complex" and (explicit_complex or not mixed_context):
+        if explicit_complex:
             return "reasoning", "complex_request"
         if mixed_context:
             return "balanced", "mixed_operations_and_knowledge"

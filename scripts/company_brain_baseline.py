@@ -228,6 +228,8 @@ def call_prompt(
 def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
     generated_at = datetime.now(timezone.utc).isoformat()
     results: list[dict[str, Any]] = []
+    previous_model: str | None = None
+    seen_models: set[str] = set()
 
     for index, (case_label, question) in enumerate(PROMPTS, 1):
         print(f"[{index}/{len(PROMPTS)}] {case_label}")
@@ -239,6 +241,31 @@ def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
             question,
             config.performance_log_path,
         )
+        selected_model = result.get("model_selected")
+        model_known = isinstance(selected_model, str) and bool(selected_model)
+        previous_known = isinstance(previous_model, str) and bool(previous_model)
+        result.update(
+            {
+                "case_order": index,
+                "previous_model": previous_model,
+                "same_model_as_previous_case": (
+                    selected_model == previous_model
+                    if model_known and previous_known
+                    else None
+                ),
+                "model_switch_from_previous_case": (
+                    selected_model != previous_model
+                    if model_known and previous_known
+                    else None
+                ),
+                "first_request_for_model_in_run": (
+                    selected_model not in seen_models if model_known else None
+                ),
+            }
+        )
+        if model_known:
+            seen_models.add(selected_model)
+            previous_model = selected_model
         results.append(result)
         status = "ok" if result["success"] else f"failed ({result['error']})"
         print(f"  {status} in {result['duration_seconds']}s")
@@ -385,6 +412,7 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
     with paths["csv"].open("w", newline="", encoding="utf-8") as handle:
         fieldnames = [
             "case_label",
+            "case_order",
             "success",
             "status_code",
             "duration_seconds",
@@ -412,6 +440,10 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
             "model_routing_complexity",
             "model_fallback_used",
             "model_fallback_reason",
+            "previous_model",
+            "same_model_as_previous_case",
+            "model_switch_from_previous_case",
+            "first_request_for_model_in_run",
             "sequential_estimated_duration_ms",
             "parallel_time_saved_estimate_ms",
             "context_degraded",
@@ -445,25 +477,35 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
         f"- Timeout seconds: {report['timeout_seconds']}",
         f"- Successful requests: {successful}/{len(results)}",
         "",
-        "| Case | Result | Context | Prompt chars | Tokens | Model | Role | Complexity | Fallback | Budget | "
-        "Parallel | Retrieval ms | Ops source | Snapshot age | Freshness | Saved est. ms | Degraded | Success | Status | "
+        "| # | Case | Result | Context | Prompt chars | Tokens | Model | Previous | "
+        "Same model | First for model | Role | Complexity | Fallback | Budget | "
+        "Parallel | Retrieval ms | Ops source | Snapshot age | Freshness | "
+        "Saved est. ms | Degraded | Success | Status | "
         "Seconds | Sources | Ops tasks | Error |",
-        "| --- | --- | --- | ---: | ---: | --- | --- | --- | --- | --- | --- | ---: | --- | ---: | --- | ---: | --- | --- | --- | "
+        "| ---: | --- | --- | --- | ---: | ---: | --- | --- | --- | --- | "
+        "--- | --- | --- | --- | --- | ---: | --- | ---: | --- | ---: | --- | "
+        "--- | --- | "
         "---: | ---: | ---: | --- |",
     ]
     for result in results:
         lines.append(
-            "| {case_label} | {result_type} | {context} | {prompt_chars} | "
-            "{tokens} | {model} | {role} | {complexity} | {fallback} | {budget} | {parallel} | {retrieval_ms} | {ops_source} | "
-            "{snapshot_age} | {freshness} | {saved_ms} | {degraded} | {success} | {status_code} | "
+            "| {case_order} | {case_label} | {result_type} | {context} | {prompt_chars} | "
+            "{tokens} | {model} | {previous_model} | {same_model} | {first_model} | "
+            "{role} | {complexity} | {fallback} | {budget} | {parallel} | "
+            "{retrieval_ms} | {ops_source} | {snapshot_age} | {freshness} | "
+            "{saved_ms} | {degraded} | {success} | {status_code} | "
             "{duration_seconds} | {source_count} | {operational_tasks_used} | "
             "{error} |".format(
                 case_label=result.get("case_label"),
+                case_order=result.get("case_order") or "",
                 result_type=result.get("result_type") or "",
                 context=",".join(result.get("selected_context_types") or []),
                 prompt_chars=result.get("final_prompt_chars") or "",
                 tokens=result.get("estimated_prompt_tokens") or "",
                 model=result.get("model_selected") or "",
+                previous_model=result.get("previous_model") or "",
+                same_model=result.get("same_model_as_previous_case"),
+                first_model=result.get("first_request_for_model_in_run"),
                 role=result.get("model_role") or "",
                 complexity=result.get("model_routing_complexity") or "",
                 fallback=result.get("model_fallback_used") or False,

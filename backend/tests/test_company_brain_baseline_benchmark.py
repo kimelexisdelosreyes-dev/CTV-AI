@@ -84,6 +84,12 @@ def test_benchmark_report_generation_writes_json_csv_and_markdown(tmp_path) -> N
     assert "model_selected" in paths["csv"].read_text(encoding="utf-8")
     assert "qwen3:8b" in paths["md"].read_text(encoding="utf-8")
     assert "Successful requests: 1/2" in paths["md"].read_text(encoding="utf-8")
+    table_lines = [
+        line
+        for line in paths["md"].read_text(encoding="utf-8").splitlines()
+        if line.startswith("|")
+    ]
+    assert len({line.count("|") for line in table_lines}) == 1
 
 
 def test_benchmark_url_accepts_api_root_or_full_endpoint() -> None:
@@ -98,6 +104,49 @@ def test_benchmark_url_accepts_api_root_or_full_endpoint() -> None:
     assert benchmark.benchmark_url("http://127.0.0.1:8000/api/v1/knowledge/ask") == (
         "http://127.0.0.1:8000/api/v1/knowledge/ask"
     )
+
+
+def test_run_benchmark_records_run_relative_model_switch_metadata(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    benchmark = load_benchmark_module()
+    monkeypatch.setattr(
+        benchmark,
+        "PROMPTS",
+        [("one", "One"), ("two", "Two"), ("three", "Three")],
+    )
+    models = iter(["qwen3:8b", "qwen3:8b", "deepseek-r1:14b"])
+
+    def call_prompt(*_args, **_kwargs):
+        return {
+            "success": True,
+            "error": None,
+            "duration_seconds": 1.0,
+            "model_selected": next(models),
+        }
+
+    monkeypatch.setattr(benchmark, "call_prompt", call_prompt)
+    report = benchmark.run_benchmark(
+        benchmark.BenchmarkConfig(
+            api_root="http://127.0.0.1:8000",
+            bearer_token="token",
+            timeout_seconds=10,
+            output_dir=tmp_path,
+            performance_log_path=tmp_path / "performance.jsonl",
+        )
+    )
+
+    first, second, third = report["results"]
+    assert first["case_order"] == 1
+    assert first["previous_model"] is None
+    assert first["first_request_for_model_in_run"] is True
+    assert second["same_model_as_previous_case"] is True
+    assert second["model_switch_from_previous_case"] is False
+    assert second["first_request_for_model_in_run"] is False
+    assert third["previous_model"] == "qwen3:8b"
+    assert third["model_switch_from_previous_case"] is True
+    assert third["first_request_for_model_in_run"] is True
 
 
 def test_call_prompt_captures_controlled_backend_error(monkeypatch) -> None:

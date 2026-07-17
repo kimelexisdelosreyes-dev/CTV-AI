@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
 
     ollama_base_url: str = "http://127.0.0.1:11434"
-    ollama_model: str = "qwen3:14b"
+    ollama_model: str = "qwen3:8b"
     ollama_general_model: str = "qwen3:14b"
     ollama_production_model: str = "qwen3:14b"
     ollama_graphics_model: str = "qwen3:14b"
@@ -20,12 +20,12 @@ class Settings(BaseSettings):
     ollama_num_predict: int = 768
     ollama_think: bool = False
     ctv_one_model_router_enabled: bool = True
-    ctv_one_model_fast: str | None = None
-    ctv_one_model_balanced: str | None = None
-    ctv_one_model_reasoning: str | None = None
-    ctv_one_model_operations: str | None = None
-    ctv_one_model_knowledge: str | None = None
-    ctv_one_model_default: str | None = None
+    ctv_one_model_fast: str | None = "qwen3:8b"
+    ctv_one_model_balanced: str | None = "qwen3:8b"
+    ctv_one_model_reasoning: str | None = "deepseek-r1:14b"
+    ctv_one_model_operations: str | None = "qwen3:8b"
+    ctv_one_model_knowledge: str | None = "qwen3:8b"
+    ctv_one_model_default: str | None = "qwen3:8b"
     ctv_one_model_availability_ttl_seconds: float = 300.0
     company_brain_max_knowledge_chunks: int = 4
     company_brain_max_knowledge_chars: int = 3200
