@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from time import perf_counter
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.capabilities import CapabilityCatalog
+from app.agents.errors import AgentErrorCategory, AgentRuntimeError
 from app.agents.models import (
     AgentExecutionBudget,
     AgentHealth,
@@ -18,8 +20,12 @@ from app.agents.models import (
 from app.agents.plugins import AgentPlugin
 from app.core.config import settings
 from app.services.context_engine import context_engine
-from app.services.inference_queue import inference_queue
-from app.services.ollama_service import ollama_service
+from app.services.inference_queue import InferenceQueueError, inference_queue
+from app.services.ollama_service import (
+    OllamaInferenceTimeoutError,
+    OllamaServiceError,
+    ollama_service,
+)
 from app.services.operations_context_service import operations_context_service
 from app.supervisor.agent_registry import AgentRegistry
 from app.supervisor.schemas import (
@@ -78,6 +84,7 @@ def _result(
     output: dict[str, Any],
     evidence: list[EvidenceItem] | None = None,
     warnings: list[str] | None = None,
+    composition_strategy: str | None = None,
 ) -> AgentResult:
     return AgentResult(
         task_id=task.task_id,
@@ -87,6 +94,7 @@ def _result(
         evidence=evidence or [],
         warnings=warnings or [],
         duration_ms=round((perf_counter() - started) * 1000, 3),
+        composition_strategy=composition_strategy,
     )
 
 
@@ -96,30 +104,164 @@ async def invoke_agent_model(
     model_name: str,
     model_role: str,
     context: AgentExecutionContext,
+    agent_id: str = "reasoning_agent",
+    inference_timeout_seconds: float | None = None,
 ) -> str:
-    if context.instrumentation:
-        context.instrumentation.model_name = model_name
-        context.instrumentation.record_metric("model_selected", model_name)
-    admission = await inference_queue.submit(
-        request_id=getattr(context.instrumentation, "request_id", None),
-        user_id=str(context.user.id),
-        model_name=model_name,
-        model_role=model_role,
-        streaming=False,
-        estimated_cost_class=model_role,
+    instrumentation = context.instrumentation
+    metric_prefix = "agent_composer" if agent_id == "response_composer_agent" else "agent_reasoning"
+    prompt_chars = sum(len(str(message.get("content") or "")) for message in messages)
+    previous_model = getattr(instrumentation, "model_name", None) if instrumentation else None
+    _record_metric(instrumentation, f"{metric_prefix}_task_model", model_name)
+    _record_metric(instrumentation, f"{metric_prefix}_prompt_chars", prompt_chars)
+    _record_metric(
+        instrumentation,
+        f"{metric_prefix}_estimated_prompt_tokens",
+        (prompt_chars + 3) // 4,
     )
-    inference_queue.record_result(context.instrumentation, admission.initial_result)
-    lease = await admission.wait()
-    inference_queue.record_lease(context.instrumentation, lease)
-    cancelled = False
+    _record_metric(
+        instrumentation,
+        f"{metric_prefix}_model_switched",
+        bool(previous_model and previous_model != model_name),
+    )
+    if instrumentation:
+        instrumentation.model_name = model_name
+        instrumentation.record_metric("model_selected", model_name)
+    queue_started = perf_counter()
+    _record_metric(instrumentation, f"{metric_prefix}_queue_admission_started", True)
+    budget = getattr(context, "budget", None)
+    queue_timeout = (
+        budget.max_queue_wait_seconds
+        if budget is not None
+        else settings.ctv_one_agent_default_max_queue_wait_seconds
+    )
     try:
-        async with asyncio.timeout(settings.ctv_one_supervisor_task_timeout_seconds):
-            return await ollama_service.chat(messages, model=model_name)
+        admission = await inference_queue.submit(
+            request_id=getattr(instrumentation, "request_id", None),
+            user_id=str(context.user.id),
+            model_name=model_name,
+            model_role=model_role,
+            streaming=False,
+            estimated_cost_class=model_role,
+            timeout_seconds=queue_timeout,
+        )
+        inference_queue.record_result(instrumentation, admission.initial_result)
+        lease = await admission.wait()
+    except InferenceQueueError as exc:
+        _record_metric(
+            instrumentation,
+            f"{metric_prefix}_queue_wait_ms",
+            round((perf_counter() - queue_started) * 1000, 3),
+        )
+        category = (
+            AgentErrorCategory.QUEUE_TIMEOUT
+            if exc.category == "queue_wait_timeout"
+            else AgentErrorCategory.DEPENDENCY_UNAVAILABLE
+        )
+        raise AgentRuntimeError(category) from exc
+    inference_queue.record_lease(instrumentation, lease)
+    lease_result = getattr(lease, "result", None)
+    queue_wait_ms = getattr(
+        lease_result,
+        "wait_duration_ms",
+        round((perf_counter() - queue_started) * 1000, 3),
+    )
+    _record_metric(instrumentation, f"{metric_prefix}_queue_wait_ms", queue_wait_ms)
+    _record_metric(instrumentation, f"{metric_prefix}_lease_acquired", True)
+    cancelled = False
+    ollama_started = perf_counter()
+    _record_metric(instrumentation, f"{metric_prefix}_ollama_request_started", True)
+    try:
+        remaining = _remaining_deadline_seconds(getattr(context, "deadline", None))
+        timeout_seconds = min(
+            inference_timeout_seconds or settings.ctv_one_supervisor_task_timeout_seconds,
+            remaining,
+        )
+        try:
+            async with asyncio.timeout(max(timeout_seconds - 1.0, 0.001)):
+                response = await ollama_service.chat(
+                    messages,
+                    model=model_name,
+                    return_metadata=True,
+                )
+        except TimeoutError as exc:
+            _record_metric(
+                instrumentation,
+                f"{metric_prefix}_timeout_origin",
+                "inference_execution",
+            )
+            raise AgentRuntimeError(AgentErrorCategory.EXECUTION_TIMEOUT) from exc
+        except OllamaInferenceTimeoutError as exc:
+            _record_metric(
+                instrumentation,
+                f"{metric_prefix}_timeout_origin",
+                "ollama_client",
+            )
+            raise AgentRuntimeError(AgentErrorCategory.EXECUTION_TIMEOUT) from exc
+        except OllamaServiceError as exc:
+            _record_metric(
+                instrumentation,
+                f"{metric_prefix}_dependency_error_category",
+                exc.category,
+            )
+            raise AgentRuntimeError(AgentErrorCategory.DEPENDENCY_FAILED) from exc
+        if isinstance(response, tuple):
+            answer, metadata = response
+            _record_ollama_timing(instrumentation, metric_prefix, metadata)
+        else:
+            answer = response
+        _record_metric(
+            instrumentation,
+            f"{metric_prefix}_ollama_total_ms",
+            round((perf_counter() - ollama_started) * 1000, 3),
+        )
+        return answer
     except asyncio.CancelledError:
         cancelled = True
+        _record_metric(instrumentation, f"{metric_prefix}_cancelled", True)
+        _record_metric(
+            instrumentation,
+            f"{metric_prefix}_cancellation_ms",
+            round((perf_counter() - ollama_started) * 1000, 3),
+        )
         raise
     finally:
+        release_started = perf_counter()
         await lease.release(cancelled=cancelled)
+        _record_metric(
+            instrumentation,
+            f"{metric_prefix}_lease_release_ms",
+            round((perf_counter() - release_started) * 1000, 3),
+        )
+        _record_metric(instrumentation, f"{metric_prefix}_lease_released", True)
+
+
+def _record_metric(instrumentation, name: str, value: object) -> None:
+    if instrumentation:
+        instrumentation.record_metric(name, value)
+
+
+def _remaining_deadline_seconds(deadline: datetime | None) -> float:
+    if deadline is None:
+        return settings.ctv_one_supervisor_total_timeout_seconds
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    return max((deadline - datetime.now(timezone.utc)).total_seconds(), 0.001)
+
+
+def _record_ollama_timing(instrumentation, prefix: str, metadata: dict[str, object]) -> None:
+    for source, target in (
+        ("total_duration", "ollama_reported_total_ms"),
+        ("load_duration", "model_load_ms"),
+        ("prompt_eval_duration", "prompt_evaluation_ms"),
+        ("eval_duration", "token_generation_ms"),
+    ):
+        value = metadata.get(source)
+        if isinstance(value, int | float):
+            _record_metric(instrumentation, f"{prefix}_{target}", round(value / 1_000_000, 3))
+    for source in ("prompt_eval_count", "eval_count"):
+        value = metadata.get(source)
+        if isinstance(value, int | float):
+            _record_metric(instrumentation, f"{prefix}_{source}", value)
 
 
 class KnowledgeAgent(LifecycleAgent):
@@ -290,6 +432,154 @@ def _dependency_payload(task: AgentTask) -> list[dict[str, Any]]:
     return values if isinstance(values, list) else []
 
 
+NATURAL_SYNTHESIS_TERMS = {
+    "compare",
+    "recommend",
+    "recommendation",
+    "executive",
+    "narrative",
+    "analyze",
+    "analysis",
+    "risk",
+    "tradeoff",
+    "why",
+}
+COMPOSITION_AGENT_ORDER = {
+    "knowledge_agent": 0,
+    "operations_agent": 1,
+    "employee_agent": 2,
+    "reasoning_agent": 3,
+}
+
+
+def bounded_composition_context(
+    question: str,
+    results: list[dict[str, Any]],
+    dependency_failures: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    ordered = sorted(
+        results,
+        key=lambda item: COMPOSITION_AGENT_ORDER.get(str(item.get("agent_id")), 99),
+    )
+    findings: list[dict[str, str]] = []
+    recommendations: list[dict[str, str]] = []
+    evidence: list[dict[str, str]] = []
+    warnings: list[str] = []
+    seen_evidence: set[str] = set()
+    per_result = max(settings.ctv_one_agent_composition_max_chars_per_result, 200)
+    for item in ordered:
+        agent_id = str(item.get("agent_id") or "agent")
+        output = item.get("structured_output")
+        output = output if isinstance(output, dict) else {}
+        content = _concise_result_content(agent_id, output, per_result)
+        target = recommendations if agent_id == "reasoning_agent" else findings
+        if content:
+            target.append({"agent_id": agent_id, "content": content})
+        for source in item.get("evidence", []):
+            if not isinstance(source, dict) or len(evidence) >= settings.ctv_one_agent_composition_max_evidence_items:
+                continue
+            evidence_id = str(source.get("evidence_id") or "")
+            if not evidence_id or evidence_id in seen_evidence:
+                continue
+            seen_evidence.add(evidence_id)
+            evidence.append(
+                {
+                    "evidence_id": evidence_id,
+                    "citation": str(source.get("citation") or ""),
+                    "source_type": str(source.get("source_type") or ""),
+                    "content": str(source.get("content") or "")[:900],
+                }
+            )
+        warnings.extend(
+            str(warning)[:300]
+            for warning in item.get("warnings", [])
+            if isinstance(warning, str)
+        )
+    for failure in dependency_failures or []:
+        warnings.append(
+            f"{failure.get('agent_id', 'agent')} unavailable: "
+            f"{failure.get('error_category', 'agent_dependency_failed')}"
+        )
+    payload = {
+        "question": question[:1500],
+        "findings": findings,
+        "evidence": evidence,
+        "recommendations": recommendations,
+        "warnings": list(dict.fromkeys(warnings))[:12],
+    }
+    _shrink_composition_payload(
+        payload,
+        max(settings.ctv_one_agent_composition_max_total_chars, 1000),
+    )
+    return payload
+
+
+def _concise_result_content(agent_id: str, output: dict[str, Any], limit: int) -> str:
+    if agent_id == "knowledge_agent":
+        return f"Approved knowledge sources retrieved: {int(output.get('source_count') or 0)}."
+    if agent_id == "operations_agent":
+        parts = [str(output.get("summary") or "").strip()]
+        parts.append(
+            f"Tasks: {int(output.get('task_count') or 0)}; "
+            f"boards: {int(output.get('board_count') or 0)}."
+        )
+        if not parts[0]:
+            parts[0] = str(output.get("snapshot_context") or "")[: max(limit - 80, 100)]
+        return " ".join(part for part in parts if part)[:limit]
+    if agent_id == "employee_agent":
+        return str(output.get("employee_context") or "")[:limit]
+    if agent_id == "reasoning_agent":
+        return str(output.get("analysis") or "")[:limit]
+    return json.dumps(output, ensure_ascii=True, sort_keys=True)[:limit]
+
+
+def _shrink_composition_payload(payload: dict[str, Any], maximum: int) -> None:
+    def size() -> int:
+        return len(json.dumps(payload, ensure_ascii=True, separators=(",", ":")))
+
+    while size() > maximum and payload["evidence"]:
+        payload["evidence"].pop()
+    for group in ("recommendations", "findings"):
+        for item in reversed(payload[group]):
+            if size() <= maximum:
+                return
+            item["content"] = item["content"][: max(len(item["content"]) // 2, 100)]
+    while size() > maximum and payload["warnings"]:
+        payload["warnings"].pop()
+
+
+def deterministic_composition(payload: dict[str, Any]) -> str:
+    sections: list[str] = []
+    findings = [item["content"] for item in payload["findings"] if item["content"]]
+    if findings:
+        sections.append("Findings\n" + "\n".join(f"- {item}" for item in findings))
+    sources = [
+        f"- {item['citation']} {item['content']}".strip()
+        for item in payload["evidence"]
+    ]
+    if sources:
+        sections.append("Sources\n" + "\n".join(sources))
+    recommendations = [
+        item["content"] for item in payload["recommendations"] if item["content"]
+    ]
+    if recommendations:
+        sections.append(
+            "Recommendations\n" + "\n".join(f"- {item}" for item in recommendations)
+        )
+    if payload["warnings"]:
+        sections.append(
+            "Warnings\n" + "\n".join(f"- {item}" for item in payload["warnings"])
+        )
+    return "\n\n".join(sections).strip()
+
+
+def requires_llm_composition(question: str, payload: dict[str, Any]) -> bool:
+    normalized = question.casefold()
+    return bool(payload["recommendations"]) or any(
+        term in normalized for term in NATURAL_SYNTHESIS_TERMS
+    )
+
+
 class ReasoningAgent(LifecycleAgent):
     definition = AgentDefinition(
         agent_id="reasoning_agent",
@@ -309,13 +599,29 @@ class ReasoningAgent(LifecycleAgent):
             {DependencyIdentifier.INFERENCE_QUEUE, DependencyIdentifier.OLLAMA_CLIENT}
         ),
         default_budget=AgentExecutionBudget(
-            max_inference_calls=1, max_retrieval_calls=0, cost_class="reasoning"
+            timeout_seconds=settings.ctv_one_agent_reasoning_timeout_seconds,
+            max_inference_calls=1,
+            max_retrieval_calls=0,
+            cost_class="reasoning",
         ),
+        default_timeout_seconds=settings.ctv_one_agent_reasoning_timeout_seconds,
+        max_timeout_seconds=settings.ctv_one_agent_reasoning_timeout_seconds,
     )
 
     async def execute(self, task: AgentTask, context: AgentExecutionContext) -> AgentResult:
         started = perf_counter()
-        payload = _dependency_payload(task)
+        dependency_failures = task.inputs.get("dependency_failures", [])
+        payload = bounded_composition_context(
+            context.question,
+            _dependency_payload(task),
+            dependency_failures,
+        )
+        serialized_payload = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+        _record_metric(
+            context.instrumentation,
+            "agent_reasoning_context_chars",
+            len(serialized_payload),
+        )
         answer = await invoke_agent_model(
             messages=[
                 {
@@ -325,10 +631,12 @@ class ReasoningAgent(LifecycleAgent):
                         "recommendations, risks, and warnings. Do not reveal hidden reasoning."
                     ),
                 },
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=True)[:10000]},
+                {"role": "user", "content": serialized_payload},
             ],
             model_name=settings.ctv_one_model_reasoning or settings.ollama_model,
             model_role="reasoning",
+            agent_id=self.definition.agent_id,
+            inference_timeout_seconds=settings.ctv_one_agent_reasoning_timeout_seconds,
             context=context,
         )
         return _result(task, started, output={"analysis": answer[:6000]})
@@ -352,13 +660,48 @@ class ResponseComposerAgent(LifecycleAgent):
             {DependencyIdentifier.INFERENCE_QUEUE, DependencyIdentifier.OLLAMA_CLIENT}
         ),
         default_budget=AgentExecutionBudget(
-            max_inference_calls=1, max_retrieval_calls=0, allow_partial=False
+            timeout_seconds=settings.ctv_one_agent_composer_timeout_seconds,
+            max_inference_calls=1,
+            max_retrieval_calls=0,
+            allow_partial=False,
         ),
+        default_timeout_seconds=settings.ctv_one_agent_composer_timeout_seconds,
+        max_timeout_seconds=settings.ctv_one_agent_composer_timeout_seconds,
     )
 
     async def execute(self, task: AgentTask, context: AgentExecutionContext) -> AgentResult:
         started = perf_counter()
-        payload = _dependency_payload(task)
+        dependency_failures = task.inputs.get("dependency_failures", [])
+        payload = bounded_composition_context(
+            context.question,
+            _dependency_payload(task),
+            dependency_failures,
+        )
+        serialized_payload = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+        _record_metric(
+            context.instrumentation,
+            "agent_composer_context_chars",
+            len(serialized_payload),
+        )
+        _record_metric(
+            context.instrumentation,
+            "agent_composer_context_evidence_items",
+            len(payload["evidence"]),
+        )
+        if dependency_failures or not requires_llm_composition(context.question, payload):
+            answer = deterministic_composition(payload)
+            strategy = (
+                "fallback_deterministic" if dependency_failures else "deterministic"
+            )
+            _record_metric(context.instrumentation, "composition_strategy", strategy)
+            return _result(
+                task,
+                started,
+                output={"answer": answer[:12000]},
+                warnings=payload["warnings"],
+                composition_strategy=strategy,
+            )
+        _record_metric(context.instrumentation, "composition_strategy", "llm")
         answer = await invoke_agent_model(
             messages=[
                 {
@@ -372,10 +715,7 @@ class ResponseComposerAgent(LifecycleAgent):
                 },
                 {
                     "role": "user",
-                    "content": json.dumps(
-                        {"question": context.question, "results": payload},
-                        ensure_ascii=True,
-                    )[:12000],
+                    "content": serialized_payload,
                 },
             ],
             model_name=(
@@ -384,9 +724,17 @@ class ResponseComposerAgent(LifecycleAgent):
                 or settings.ollama_model
             ),
             model_role="balanced",
+            agent_id=self.definition.agent_id,
+            inference_timeout_seconds=settings.ctv_one_agent_composer_timeout_seconds,
             context=context,
         )
-        return _result(task, started, output={"answer": answer[:12000]})
+        return _result(
+            task,
+            started,
+            output={"answer": answer[:12000]},
+            warnings=payload["warnings"],
+            composition_strategy="llm",
+        )
 
 
 def build_agent_registry() -> AgentRegistry:

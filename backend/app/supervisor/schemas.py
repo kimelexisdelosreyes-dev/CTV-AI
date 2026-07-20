@@ -12,6 +12,7 @@ from app.agents.models import AgentDefinition, AgentExecutionBudget, AgentResour
 SupervisorMode = Literal["direct", "supervised", "fallback_direct"]
 RequestedSupervisorMode = Literal["auto", "direct", "supervised"]
 AgentStatus = Literal["success", "failed", "timed_out", "skipped"]
+CompositionStrategy = Literal["llm", "deterministic", "fallback_deterministic"]
 
 
 class SupervisorRequest(BaseModel):
@@ -75,6 +76,7 @@ class AgentResult(BaseModel):
     agent_version: str | None = None
     capability: str | None = None
     resource_usage: AgentResourceUsage = Field(default_factory=AgentResourceUsage)
+    composition_strategy: CompositionStrategy | None = None
 
 
 class SupervisorResult(BaseModel):

@@ -16,6 +16,7 @@ class AgentErrorCategory(StrEnum):
     BUDGET_EXCEEDED = "agent_budget_exceeded"
     QUEUE_TIMEOUT = "agent_queue_timeout"
     EXECUTION_TIMEOUT = "agent_execution_timeout"
+    TASK_DEADLINE_EXCEEDED = "agent_task_deadline_exceeded"
     CANCELLED = "agent_cancelled"
     RESULT_INVALID = "agent_result_invalid"
     DEPENDENCY_FAILED = "agent_dependency_failed"
@@ -35,6 +36,7 @@ SAFE_AGENT_MESSAGES: dict[AgentErrorCategory, str] = {
     AgentErrorCategory.BUDGET_EXCEEDED: "The agent execution budget was exceeded.",
     AgentErrorCategory.QUEUE_TIMEOUT: "The agent could not enter the inference queue in time.",
     AgentErrorCategory.EXECUTION_TIMEOUT: "The agent execution timed out.",
+    AgentErrorCategory.TASK_DEADLINE_EXCEEDED: "The agent task deadline was exceeded.",
     AgentErrorCategory.CANCELLED: "The agent execution was cancelled.",
     AgentErrorCategory.RESULT_INVALID: "The agent returned an invalid result.",
     AgentErrorCategory.DEPENDENCY_FAILED: "An agent dependency failed.",
@@ -51,4 +53,3 @@ class AgentRuntimeError(RuntimeError):
 
 class AgentRegistrationError(ValueError):
     pass
-

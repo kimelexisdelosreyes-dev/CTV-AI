@@ -1,9 +1,12 @@
 import asyncio
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from app.core.context_requirements import ContextRequirements
 from app.services.semantic_cache import (
     SemanticCacheService,
+    SemanticCacheLookup,
+    SemanticCacheResult,
     _cosine,
     normalize_query,
 )
@@ -148,3 +151,37 @@ def test_operations_fingerprint_uses_active_content_hash(monkeypatch) -> None:
     )
     assert operations == "stable-content-hash"
     assert knowledge is None
+
+
+def test_hot_exact_hit_avoids_database_lookup(monkeypatch) -> None:
+    service = SemanticCacheService()
+    lookup = SemanticCacheLookup(
+        eligible=True,
+        normalized_query="leave policy",
+        exact_key="exact",
+        scope_key="global_company",
+        scope_type="global_company",
+        invalidation_fingerprint="revision",
+        context_route="policy",
+        context_types=("knowledge",),
+    )
+    now = datetime.now(timezone.utc)
+    service._hot_put(
+        lookup.exact_key,
+        SemanticCacheResult(hit=True, hit_type="exact", answer="cached"),
+        created_at=now,
+        expires_at=now + timedelta(minutes=5),
+    )
+
+    class DatabaseMustNotOpen:
+        async def __aenter__(self):
+            raise AssertionError("Hot exact hit must not open a cache database session")
+
+        async def __aexit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(cache_module, "AsyncSessionLocal", DatabaseMustNotOpen)
+    result = asyncio.run(service.lookup(lookup))
+    assert result.hit is True
+    assert result.cache_source == "hot"
+    assert result.database_query_ms == 0.0

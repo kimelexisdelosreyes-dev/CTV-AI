@@ -280,6 +280,15 @@ def test_supervisor_benchmark_cases_and_metrics_are_present() -> None:
                 "supervisor_partial_result": False,
                 "inference_queue_wait_ms": 1.0,
                 "semantic_cache_hit": False,
+                "agent_runtime_agent_versions": {"knowledge_agent": "2.0.0"},
+                "agent_runtime_capabilities": ["evidence_retrieval"],
+                "agent_runtime_budget_status": "within_budget",
+                "composition_strategy": "deterministic",
+                "agent_composer_context_chars": 2048,
+                "agent_composer_queue_wait_ms": 0.0,
+                "agent_composer_lease_released": True,
+                "agent_reasoning_queue_wait_ms": 2.0,
+                "agent_reasoning_lease_released": True,
             }
         }
     )
@@ -287,3 +296,14 @@ def test_supervisor_benchmark_cases_and_metrics_are_present() -> None:
     assert measured["supervisor_task_count"] == 3
     assert measured["supervisor_parallelism_peak"] == 2
     assert measured["inference_queue_wait_ms"] == 1.0
+    assert measured["agent_runtime_agent_versions"] == {
+        "knowledge_agent": "2.0.0"
+    }
+    assert measured["agent_runtime_capabilities"] == ["evidence_retrieval"]
+    assert measured["agent_runtime_budget_status"] == "within_budget"
+    assert measured["composition_strategy"] == "deterministic"
+    assert measured["composer_context_chars"] == 2048
+    assert measured["composer_queue_wait_ms"] == 0.0
+    assert measured["composer_lease_released"] is True
+    assert measured["reasoning_queue_wait_ms"] == 2.0
+    assert measured["reasoning_lease_released"] is True

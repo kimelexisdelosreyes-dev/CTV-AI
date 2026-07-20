@@ -426,6 +426,7 @@ async def answer_with_knowledge(
     cache_result = SemanticCacheResult(skip_reason="cache_lookup_failed")
     cache_started = instrumentation.clock() if instrumentation else None
     try:
+        cache_build_started = instrumentation.clock() if instrumentation else None
         cache_lookup = await semantic_cache.build_lookup(
             question=question,
             route_intent=route.intent,
@@ -435,6 +436,11 @@ async def answer_with_knowledge(
             assistant=assistant,
             category=category,
         )
+        if instrumentation:
+            instrumentation.record_metric(
+                "semantic_cache_key_build_duration_ms",
+                max((instrumentation.clock() - cache_build_started) * 1000, 0.0),
+            )
         cache_result = await semantic_cache.lookup(cache_lookup)
     except Exception:
         cache_result = SemanticCacheResult(skip_reason="cache_service_error")
@@ -459,6 +465,19 @@ async def answer_with_knowledge(
         )
         instrumentation.record_metric("ollama_skipped_due_to_cache", cache_result.hit)
         instrumentation.record_metric("semantic_cache_entry_age_seconds", cache_result.age_seconds)
+        instrumentation.record_metric("semantic_cache_source", cache_result.cache_source)
+        instrumentation.record_metric(
+            "semantic_cache_database_query_duration_ms",
+            cache_result.database_query_ms,
+        )
+        instrumentation.record_metric(
+            "semantic_cache_deserialization_duration_ms",
+            cache_result.deserialization_ms,
+        )
+        instrumentation.record_metric(
+            "semantic_cache_persistence_duration_ms",
+            cache_result.persistence_ms,
+        )
     if cache_result.hit and cache_result.answer and cache_result.personalization:
         inference_queue.record_cache_bypass(instrumentation)
         executive_supervisor.record_cache_hit(instrumentation)

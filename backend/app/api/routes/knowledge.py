@@ -270,10 +270,40 @@ async def search(
 async def ask(
     request: KnowledgeAskRequest,
     http_response: Response,
+    http_request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     instrumentation = AskPerformanceInstrumentation()
+    endpoint_started = perf_counter()
+    pre_endpoint_ms = max(
+        (
+            endpoint_started
+            - getattr(http_request.state, "server_request_started_at", endpoint_started)
+        )
+        * 1000,
+        0.0,
+    )
+    http_request.state.pre_endpoint_duration_ms = pre_endpoint_ms
+    authentication_ms = float(
+        getattr(http_request.state, "authentication_duration_ms", 0.0)
+    )
+    instrumentation.record_metric(
+        "request_validation_duration_ms",
+        max(pre_endpoint_ms - authentication_ms, 0.0),
+    )
+    instrumentation.record_metric(
+        "authentication_duration_ms",
+        getattr(http_request.state, "authentication_duration_ms", 0.0),
+    )
+    instrumentation.record_metric(
+        "authentication_decode_duration_ms",
+        getattr(http_request.state, "authentication_decode_duration_ms", 0.0),
+    )
+    instrumentation.record_metric(
+        "authentication_query_duration_ms",
+        getattr(http_request.state, "authentication_query_duration_ms", 0.0),
+    )
     authenticated_user = snapshot_authenticated_user(current_user)
     user_message_saved = False
 
@@ -315,12 +345,13 @@ async def ask(
                     conversation_id=request.conversation_id,
                 )
             if request.conversation_id is not None:
-                await conversation_service.append_assistant_message_for_request(
-                    db,
-                    authenticated_user,
-                    request.conversation_id,
-                    answer,
-                )
+                with instrumentation.measure("persistence"):
+                    await conversation_service.append_assistant_message_for_request(
+                        db,
+                        authenticated_user,
+                        request.conversation_id,
+                        answer,
+                    )
     except CompanyBrainServiceError as exc:
         if request.conversation_id is not None and user_message_saved:
             await conversation_service.append_assistant_message_for_request(
@@ -352,6 +383,17 @@ async def ask(
             },
         ) from exc
 
+    endpoint_handler_ms = max((perf_counter() - endpoint_started) * 1000, 0.0)
+    http_request.state.endpoint_handler_duration_ms = endpoint_handler_ms
+    instrumentation.record_metric("endpoint_handler_duration_ms", endpoint_handler_ms)
+    instrumentation.record_metric(
+        "response_model_construction_duration_ms",
+        instrumentation.durations_ms.get("response_formatting", 0.0),
+    )
+    instrumentation.record_metric(
+        "persistence_duration_ms",
+        instrumentation.durations_ms.get("persistence", 0.0),
+    )
     instrumentation.mark_success()
     log_ask_performance(instrumentation, "success")
     http_response.headers["X-Request-ID"] = instrumentation.request_id
@@ -387,6 +429,10 @@ async def ask_stream(
 
     async def event_stream():
         instrumentation = AskPerformanceInstrumentation()
+        instrumentation.record_metric(
+            "authentication_duration_ms",
+            getattr(http_request.state, "authentication_duration_ms", 0.0),
+        )
         user_message_saved = False
         answer_parts: list[str] = []
         token_chunk_count = 0

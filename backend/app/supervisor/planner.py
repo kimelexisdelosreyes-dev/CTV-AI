@@ -88,6 +88,10 @@ def deterministic_plan(
         "operations": ("operations_agent", "operations_status", "OperationsSnapshotEvidenceV1"),
         "employee": ("employee_agent", "employee_context", "EmployeeSelfContextV1"),
     }
+    timeout_by_agent = {
+        "reasoning_agent": settings.ctv_one_agent_reasoning_timeout_seconds,
+        "response_composer_agent": settings.ctv_one_agent_composer_timeout_seconds,
+    }
     for domain in sorted(domains):
         agent_id, capability, contract = agent_by_domain[domain]
         tasks.append(
@@ -109,7 +113,7 @@ def deterministic_plan(
                 capability="recommend",
                 objective="Compare and synthesize validated evidence.",
                 dependency_ids=source_ids,
-                timeout_seconds=settings.ctv_one_supervisor_task_timeout_seconds,
+                timeout_seconds=timeout_by_agent["reasoning_agent"],
                 optional=True,
                 output_contract="ReasoningSummaryV1",
             )
@@ -121,7 +125,7 @@ def deterministic_plan(
             capability="final_answer",
             objective="Compose the final grounded Company Brain response.",
             dependency_ids=[task.task_id for task in tasks],
-            timeout_seconds=settings.ctv_one_supervisor_task_timeout_seconds,
+            timeout_seconds=timeout_by_agent["response_composer_agent"],
             output_contract="CompanyBrainAnswerV1",
         )
     )
@@ -169,8 +173,12 @@ def validate_plan(
     if set(plan.required_agents) != task_agents:
         raise SupervisorPlanError("Plan agent declarations do not match its tasks.")
     for task in plan.tasks:
-        if task.timeout_seconds > settings.ctv_one_supervisor_task_timeout_seconds:
-            raise SupervisorPlanError("Plan task timeout exceeds the configured limit.")
+        configured_timeout = {
+            "reasoning_agent": settings.ctv_one_agent_reasoning_timeout_seconds,
+            "response_composer_agent": settings.ctv_one_agent_composer_timeout_seconds,
+        }.get(task.agent_id, settings.ctv_one_supervisor_task_timeout_seconds)
+        if task.timeout_seconds > configured_timeout:
+            raise SupervisorPlanError("Plan task timeout exceeds the configured agent limit.")
         if any(dependency not in tasks for dependency in task.dependency_ids):
             raise SupervisorPlanError("Plan contains an unknown dependency.")
         try:
@@ -204,7 +212,11 @@ def resolve_plan_capabilities(
     resolved_tasks: list[AgentTask] = []
     excluded_optional: set[str] = set()
     system_maximum = AgentExecutionBudget(
-        timeout_seconds=settings.ctv_one_supervisor_task_timeout_seconds,
+        timeout_seconds=max(
+            settings.ctv_one_supervisor_task_timeout_seconds,
+            settings.ctv_one_agent_reasoning_timeout_seconds,
+            settings.ctv_one_agent_composer_timeout_seconds,
+        ),
         max_inference_calls=settings.ctv_one_agent_default_max_inference_calls,
         max_retrieval_calls=settings.ctv_one_agent_default_max_retrieval_calls,
         max_evidence_items=settings.ctv_one_agent_default_max_evidence_items,

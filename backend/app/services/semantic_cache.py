@@ -4,7 +4,9 @@ import hashlib
 import json
 import math
 import re
+from collections import OrderedDict
 from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
 from datetime import datetime, timedelta, timezone
 from time import perf_counter
 from typing import Literal
@@ -71,6 +73,17 @@ class SemanticCacheResult:
     skip_reason: str | None = None
     lookup: SemanticCacheLookup | None = None
     lookup_duration_ms: float = 0.0
+    cache_source: Literal["hot", "database", "none"] = "none"
+    database_query_ms: float = 0.0
+    deserialization_ms: float = 0.0
+    persistence_ms: float = 0.0
+
+
+@dataclass(frozen=True)
+class _HotExactEntry:
+    result: SemanticCacheResult
+    created_at: datetime
+    expires_at: datetime
 
 
 def normalize_query(question: str) -> str:
@@ -112,6 +125,55 @@ def _cosine(left: list[float], right: list[float]) -> float:
 
 
 class SemanticCacheService:
+    def __init__(self) -> None:
+        self._hot_exact: OrderedDict[str, _HotExactEntry] = OrderedDict()
+        self._hot_hit_count = 0
+
+    def _hot_get(
+        self, lookup: SemanticCacheLookup, now: datetime, started: float
+    ) -> SemanticCacheResult | None:
+        item = self._hot_exact.get(lookup.exact_key)
+        if item is None:
+            return None
+        if item.expires_at <= now:
+            self._hot_exact.pop(lookup.exact_key, None)
+            return None
+        self._hot_exact.move_to_end(lookup.exact_key)
+        self._hot_hit_count += 1
+        return dataclass_replace(
+            item.result,
+            lookup=lookup,
+            age_seconds=max((now - item.created_at).total_seconds(), 0.0),
+            lookup_duration_ms=(perf_counter() - started) * 1000,
+            cache_source="hot",
+            database_query_ms=0.0,
+            deserialization_ms=0.0,
+            persistence_ms=0.0,
+        )
+
+    def _hot_put(
+        self,
+        exact_key: str,
+        result: SemanticCacheResult,
+        *,
+        created_at: datetime,
+        expires_at: datetime,
+    ) -> None:
+        maximum = max(settings.ctv_one_semantic_cache_hot_exact_max_entries, 0)
+        if maximum == 0:
+            return
+        self._hot_exact[exact_key] = _HotExactEntry(
+            result=result,
+            created_at=created_at,
+            expires_at=expires_at,
+        )
+        self._hot_exact.move_to_end(exact_key)
+        while len(self._hot_exact) > maximum:
+            self._hot_exact.popitem(last=False)
+
+    def clear_hot_exact(self) -> None:
+        self._hot_exact.clear()
+
     async def _state_fingerprints(
         self, context_types: tuple[str, ...]
     ) -> tuple[str | None, str | None]:
@@ -228,18 +290,24 @@ class SemanticCacheService:
                 lookup_duration_ms=(perf_counter() - started) * 1000,
             )
         now = datetime.now(timezone.utc)
+        hot_result = self._hot_get(lookup, now, started)
+        if hot_result is not None:
+            return hot_result
         async with AsyncSessionLocal() as db:
             entry = None
             hit_type: Literal["exact", "semantic", "none"] = "none"
             similarity = None
             query_embedding = None
+            database_query_ms = 0.0
             if settings.ctv_one_semantic_cache_exact_enabled:
+                query_started = perf_counter()
                 entry = await db.scalar(
                     select(SemanticCacheEntry).where(
                         SemanticCacheEntry.exact_key == lookup.exact_key,
                         SemanticCacheEntry.expires_at > now,
                     )
                 )
+                database_query_ms += (perf_counter() - query_started) * 1000
                 if entry is not None:
                     hit_type = "exact"
             if (
@@ -248,6 +316,7 @@ class SemanticCacheService:
             ):
                 embeddings = await embedding_service.embed([lookup.normalized_query])
                 query_embedding = embeddings[0]
+                query_started = perf_counter()
                 candidates = (
                     await db.scalars(
                         select(SemanticCacheEntry)
@@ -263,6 +332,7 @@ class SemanticCacheService:
                         .limit(settings.ctv_one_semantic_cache_max_candidates)
                     )
                 ).all()
+                database_query_ms += (perf_counter() - query_started) * 1000
                 scored = [
                     (_cosine(query_embedding, candidate.question_embedding), candidate)
                     for candidate in candidates
@@ -281,12 +351,11 @@ class SemanticCacheService:
                     lookup=enriched,
                     similarity_score=similarity,
                     lookup_duration_ms=(perf_counter() - started) * 1000,
+                    cache_source="database",
+                    database_query_ms=database_query_ms,
                 )
-            entry.hit_count += 1
-            entry.last_hit_at = now
-            entry.last_similarity = similarity
-            await db.commit()
-            return SemanticCacheResult(
+            deserialize_started = perf_counter()
+            result = SemanticCacheResult(
                 hit=True,
                 hit_type=hit_type,
                 answer=entry.safe_answer,
@@ -298,6 +367,19 @@ class SemanticCacheService:
                 selected_model=entry.model_name,
                 model_role=entry.model_role,
                 lookup=lookup,
+                lookup_duration_ms=(perf_counter() - started) * 1000,
+                cache_source="database",
+                database_query_ms=database_query_ms,
+                deserialization_ms=(perf_counter() - deserialize_started) * 1000,
+            )
+            self._hot_put(
+                lookup.exact_key,
+                result,
+                created_at=entry.created_at,
+                expires_at=entry.expires_at,
+            )
+            return dataclass_replace(
+                result,
                 lookup_duration_ms=(perf_counter() - started) * 1000,
             )
 
@@ -376,6 +458,7 @@ class SemanticCacheService:
             )
             await db.execute(statement)
             await db.commit()
+        self._hot_exact.pop(lookup.exact_key, None)
         return True
 
     async def purge_expired(self) -> int:
@@ -386,6 +469,7 @@ class SemanticCacheService:
                 )
             )
             await db.commit()
+            self.clear_hot_exact()
             return result.rowcount or 0
 
     async def invalidate_knowledge(self) -> int:
@@ -404,6 +488,7 @@ class SemanticCacheService:
         async with AsyncSessionLocal() as db:
             result = await db.execute(delete(SemanticCacheEntry).where(condition))
             await db.commit()
+            self.clear_hot_exact()
             return result.rowcount or 0
 
     async def statistics(self) -> dict[str, int]:
@@ -416,7 +501,11 @@ class SemanticCacheService:
                 )
             ) or 0
             hits = await db.scalar(select(func.sum(SemanticCacheEntry.hit_count))) or 0
-            return {"entry_count": total, "expired_count": expired, "hit_count": hits}
+            return {
+                "entry_count": total,
+                "expired_count": expired,
+                "hit_count": hits + self._hot_hit_count,
+            }
 
 
 semantic_cache = SemanticCacheService()

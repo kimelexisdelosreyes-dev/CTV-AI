@@ -306,6 +306,10 @@ def call_prompt(
     ) or streamed_request_id
     error_category = headers.get("X-Error-Category") if headers else None
     result_type = headers.get("X-Result-Type") if headers else None
+    server_duration_ms = headers.get("X-Server-Duration-Ms") if headers else None
+    serialization_middleware_ms = (
+        headers.get("X-Response-Serialization-And-Middleware-Ms") if headers else None
+    )
     if not ok:
         result_type = result_type_for_error(error_category)
     elif not result_type:
@@ -331,6 +335,10 @@ def call_prompt(
         "safe_detail": detail if isinstance(detail, str) else None,
         "backend_request_id": backend_request_id,
         "result_type": result_type,
+        "server_duration_ms": _optional_float(server_duration_ms),
+        "response_serialization_and_middleware_ms": _optional_float(
+            serialization_middleware_ms
+        ),
         "answer_chars": len(answer) if isinstance(answer, str) else 0,
         "source_count": len(sources) if isinstance(sources, list) else 0,
         "operational_context_applied": (
@@ -553,6 +561,27 @@ def prompt_metrics_from_event(event: dict[str, Any] | None) -> dict[str, Any]:
         "cache_scope": metrics.get("semantic_cache_scope"),
         "ollama_skipped": metrics.get("ollama_skipped_due_to_cache"),
         "cache_write_duration_ms": metrics.get("semantic_cache_write_duration_ms"),
+        "cache_key_build_duration_ms": metrics.get(
+            "semantic_cache_key_build_duration_ms"
+        ),
+        "cache_database_query_duration_ms": metrics.get(
+            "semantic_cache_database_query_duration_ms"
+        ),
+        "cache_deserialization_duration_ms": metrics.get(
+            "semantic_cache_deserialization_duration_ms"
+        ),
+        "cache_persistence_duration_ms": metrics.get(
+            "semantic_cache_persistence_duration_ms"
+        ),
+        "cache_source": metrics.get("semantic_cache_source"),
+        "authentication_duration_ms": metrics.get("authentication_duration_ms"),
+        "request_validation_duration_ms": metrics.get(
+            "request_validation_duration_ms"
+        ),
+        "response_model_construction_duration_ms": metrics.get(
+            "response_model_construction_duration_ms"
+        ),
+        "persistence_duration_ms": metrics.get("persistence_duration_ms"),
         "supervisor_mode": metrics.get("supervisor_mode"),
         "supervisor_planner_type": metrics.get("supervisor_planner_type"),
         "supervisor_task_count": metrics.get("supervisor_plan_task_count"),
@@ -583,6 +612,37 @@ def prompt_metrics_from_event(event: dict[str, Any] | None) -> dict[str, Any]:
         "agent_runtime_queue_wait_ms": metrics.get(
             "agent_runtime_queue_wait_ms"
         ),
+        "composition_strategy": metrics.get("composition_strategy"),
+        "composer_context_chars": metrics.get("agent_composer_context_chars"),
+        "composer_prompt_chars": metrics.get("agent_composer_prompt_chars"),
+        "composer_estimated_prompt_tokens": metrics.get(
+            "agent_composer_estimated_prompt_tokens"
+        ),
+        "composer_queue_wait_ms": metrics.get("agent_composer_queue_wait_ms"),
+        "composer_ollama_total_ms": metrics.get("agent_composer_ollama_total_ms"),
+        "composer_model_load_ms": metrics.get("agent_composer_model_load_ms"),
+        "composer_prompt_evaluation_ms": metrics.get(
+            "agent_composer_prompt_evaluation_ms"
+        ),
+        "composer_token_generation_ms": metrics.get(
+            "agent_composer_token_generation_ms"
+        ),
+        "composer_timeout_origin": metrics.get("agent_composer_timeout_origin"),
+        "composer_lease_released": metrics.get("agent_composer_lease_released"),
+        "composer_cancelled": metrics.get("agent_composer_cancelled"),
+        "reasoning_context_chars": metrics.get("agent_reasoning_context_chars"),
+        "reasoning_prompt_chars": metrics.get("agent_reasoning_prompt_chars"),
+        "reasoning_estimated_prompt_tokens": metrics.get(
+            "agent_reasoning_estimated_prompt_tokens"
+        ),
+        "reasoning_queue_wait_ms": metrics.get("agent_reasoning_queue_wait_ms"),
+        "reasoning_ollama_total_ms": metrics.get("agent_reasoning_ollama_total_ms"),
+        "reasoning_timeout_origin": metrics.get("agent_reasoning_timeout_origin"),
+        "reasoning_lease_released": metrics.get("agent_reasoning_lease_released"),
+        "reasoning_cancelled": metrics.get("agent_reasoning_cancelled"),
+        "reasoning_dependency_error_category": metrics.get(
+            "agent_reasoning_dependency_error_category"
+        ),
     }
 
 
@@ -590,6 +650,13 @@ def seconds_to_ms(value: Any) -> float | None:
     if isinstance(value, int | float):
         return round(float(value) * 1000, 3)
     return None
+
+
+def _optional_float(value: Any) -> float | None:
+    try:
+        return round(float(value), 3) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def report_paths(output_dir: Path, generated_at: str) -> dict[str, Path]:
@@ -624,6 +691,8 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
             "safe_detail",
             "backend_request_id",
             "result_type",
+            "server_duration_ms",
+            "response_serialization_and_middleware_ms",
             "benchmark_failure_injection",
             "selected_context_types",
             "parallel_retrieval_used",
@@ -646,6 +715,15 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
             "cache_scope",
             "ollama_skipped",
             "cache_write_duration_ms",
+            "cache_key_build_duration_ms",
+            "cache_database_query_duration_ms",
+            "cache_deserialization_duration_ms",
+            "cache_persistence_duration_ms",
+            "cache_source",
+            "authentication_duration_ms",
+            "request_validation_duration_ms",
+            "response_model_construction_duration_ms",
+            "persistence_duration_ms",
             "supervisor_mode",
             "supervisor_planner_type",
             "supervisor_task_count",
@@ -664,6 +742,27 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
             "agent_runtime_budget_status",
             "agent_runtime_task_outcomes",
             "agent_runtime_queue_wait_ms",
+            "composition_strategy",
+            "composer_context_chars",
+            "composer_prompt_chars",
+            "composer_estimated_prompt_tokens",
+            "composer_queue_wait_ms",
+            "composer_ollama_total_ms",
+            "composer_model_load_ms",
+            "composer_prompt_evaluation_ms",
+            "composer_token_generation_ms",
+            "composer_timeout_origin",
+            "composer_lease_released",
+            "composer_cancelled",
+            "reasoning_context_chars",
+            "reasoning_prompt_chars",
+            "reasoning_estimated_prompt_tokens",
+            "reasoning_queue_wait_ms",
+            "reasoning_ollama_total_ms",
+            "reasoning_timeout_origin",
+            "reasoning_lease_released",
+            "reasoning_cancelled",
+            "reasoning_dependency_error_category",
             "model_selected",
             "model_role",
             "model_routing_reason",

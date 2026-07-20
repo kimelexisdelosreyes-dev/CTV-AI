@@ -1,8 +1,9 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from time import perf_counter
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router, dashboard_router, openai_router
@@ -52,6 +53,22 @@ app = FastAPI(
     description="Private, local-first AI platform for multimedia production.",
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def server_timing_middleware(request: Request, call_next):
+    started = perf_counter()
+    request.state.server_request_started_at = started
+    response = await call_next(request)
+    total_ms = max((perf_counter() - started) * 1000, 0.0)
+    endpoint_ms = float(getattr(request.state, "endpoint_handler_duration_ms", 0.0))
+    pre_endpoint_ms = float(getattr(request.state, "pre_endpoint_duration_ms", 0.0))
+    serialization_and_middleware_ms = max(total_ms - endpoint_ms - pre_endpoint_ms, 0.0)
+    response.headers["X-Server-Duration-Ms"] = f"{total_ms:.3f}"
+    response.headers[
+        "X-Response-Serialization-And-Middleware-Ms"
+    ] = f"{serialization_and_middleware_ms:.3f}"
+    return response
 
 app.add_middleware(
     CORSMiddleware,

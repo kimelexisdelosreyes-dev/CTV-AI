@@ -136,6 +136,12 @@ class Settings(BaseSettings):
     ctv_one_agent_default_max_evidence_items: int = 12
     ctv_one_agent_default_max_output_chars: int = 16000
     ctv_one_agent_default_max_queue_wait_seconds: float = 120.0
+    ctv_one_agent_reasoning_timeout_seconds: float = 90.0
+    ctv_one_agent_composer_timeout_seconds: float = 120.0
+    ctv_one_agent_composition_max_evidence_items: int = 8
+    ctv_one_agent_composition_max_chars_per_result: int = 2500
+    ctv_one_agent_composition_max_total_chars: int = 8000
+    ctv_one_semantic_cache_hot_exact_max_entries: int = 128
 
     model_config = SettingsConfigDict(
         env_file=".env",

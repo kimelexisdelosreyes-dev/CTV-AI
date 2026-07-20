@@ -151,7 +151,11 @@ class ExecutiveSupervisor:
         if hasattr(db, "in_transaction") and db.in_transaction():
             await db.rollback()
         maximum_budget = AgentExecutionBudget(
-            timeout_seconds=settings.ctv_one_supervisor_task_timeout_seconds,
+            timeout_seconds=max(
+                settings.ctv_one_supervisor_task_timeout_seconds,
+                settings.ctv_one_agent_reasoning_timeout_seconds,
+                settings.ctv_one_agent_composer_timeout_seconds,
+            ),
             max_inference_calls=settings.ctv_one_agent_default_max_inference_calls,
             max_retrieval_calls=settings.ctv_one_agent_default_max_retrieval_calls,
             max_evidence_items=settings.ctv_one_agent_default_max_evidence_items,
@@ -204,8 +208,15 @@ class ExecutiveSupervisor:
         )
         if composer and composer.status == "success":
             final_answer = str(composer.structured_output.get("answer") or "").strip()
+            composition_strategy = composer.composition_strategy or "llm"
         else:
             final_answer = self._deterministic_summary(successful)
+            composition_strategy = "fallback_deterministic"
+            self._metric(
+                instrumentation,
+                "composition_strategy",
+                composition_strategy,
+            )
         if not final_answer and settings.ctv_one_supervisor_fallback_direct:
             self.fallback_count += 1
             self.failed_plans += 1
@@ -270,6 +281,7 @@ class ExecutiveSupervisor:
                 )
                 for result in results
             ],
+            "composition_strategy": composition_strategy,
         }
         supervisor_result = SupervisorResult(
             plan_id=plan.plan_id,
@@ -301,6 +313,7 @@ class ExecutiveSupervisor:
             ("agent_runtime_capabilities", metrics["capabilities"]),
             ("agent_runtime_budget_status", metrics["budget_status"]),
             ("agent_runtime_task_outcomes", metrics["task_outcomes"]),
+            ("composition_strategy", metrics["composition_strategy"]),
             (
                 "agent_runtime_queue_wait_ms",
                 round(sum(result.resource_usage.queue_wait_ms for result in results), 3),
@@ -355,6 +368,8 @@ class ExecutiveSupervisor:
                 "max_parallel_tasks": settings.ctv_one_supervisor_max_parallel_tasks,
                 "planner_timeout_seconds": settings.ctv_one_supervisor_planner_timeout_seconds,
                 "task_timeout_seconds": settings.ctv_one_supervisor_task_timeout_seconds,
+                "reasoning_timeout_seconds": settings.ctv_one_agent_reasoning_timeout_seconds,
+                "composer_timeout_seconds": settings.ctv_one_agent_composer_timeout_seconds,
                 "total_timeout_seconds": settings.ctv_one_supervisor_total_timeout_seconds,
             },
             "runtime_ready": not unavailable_required,

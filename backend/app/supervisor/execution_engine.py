@@ -5,6 +5,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from time import perf_counter
 
 from app.core.config import settings
@@ -15,6 +16,7 @@ from app.agents.models import AgentLifecycleState, AgentResourceUsage
 from app.supervisor.agent_registry import AgentRegistry
 from app.supervisor.planner import validate_plan
 from app.supervisor.schemas import AgentResult, AgentTask, ExecutionPlan
+from app.services.service_errors import CompanyBrainServiceError
 
 
 SupervisorEventCallback = Callable[[str, dict[str, object]], Awaitable[None]]
@@ -95,14 +97,43 @@ class ExecutionEngine:
                             },
                         )
             dependencies = _validated_dependency_results(task, results)
+            dependency_failures = [
+                {
+                    "agent_id": results[dependency].agent_id,
+                    "error_category": (
+                        results[dependency].error_category or "agent_dependency_failed"
+                    ),
+                }
+                for dependency in task.dependency_ids
+                if results[dependency].status != "success"
+            ]
             runtime_task = task.model_copy(
                 update={
                     "agent_id": selected_agent_id,
-                    "inputs": {**task.inputs, "dependency_results": dependencies},
+                    "inputs": {
+                        **task.inputs,
+                        "dependency_results": dependencies,
+                        "dependency_failures": dependency_failures,
+                    },
                 }
             )
             budget = task.budget or getattr(context, "budget", None)
-            task_context = replace(context, task_id=task.task_id, budget=budget) if budget else context
+            timeout_seconds = (
+                min(task.timeout_seconds, budget.timeout_seconds)
+                if budget
+                else task.timeout_seconds
+            )
+            task_context = (
+                replace(
+                    context,
+                    task_id=task.task_id,
+                    budget=budget,
+                    deadline=datetime.now(timezone.utc)
+                    + timedelta(seconds=timeout_seconds),
+                )
+                if budget
+                else context
+            )
             if event_callback:
                 if task.agent_id == "response_composer_agent":
                     await event_callback("composition_started", {})
@@ -113,12 +144,21 @@ class ExecutionEngine:
             running += 1
             peak = max(peak, running)
             task_started = perf_counter()
+            if selected_agent_id == "response_composer_agent" and getattr(
+                context, "instrumentation", None
+            ):
+                context.instrumentation.record_metric(
+                    "agent_composer_task_start_ms",
+                    round(
+                        (task_started - context.instrumentation.request_started_at) * 1000,
+                        3,
+                    ),
+                )
             execution_started = False
             try:
                 if self.runtime_manager and self.runtime_manager.initialized_at is not None:
                     await self.runtime_manager.begin_execution(selected_agent_id)
                     execution_started = True
-                timeout_seconds = min(task.timeout_seconds, budget.timeout_seconds) if budget else task.timeout_seconds
                 async with asyncio.timeout(timeout_seconds):
                     result = await registry.get(selected_agent_id).execute(runtime_task, task_context)
                 result = AgentResult.model_validate(result)
@@ -152,7 +192,7 @@ class ExecutionEngine:
                     capability=task.capability,
                     agent_version=task.agent_version,
                     error_category=(
-                        AgentErrorCategory.EXECUTION_TIMEOUT.value
+                        AgentErrorCategory.TASK_DEADLINE_EXCEEDED.value
                         if self.runtime_manager
                         else "supervisor_task_timeout"
                     ),
@@ -190,6 +230,35 @@ class ExecutionEngine:
                     capability=task.capability,
                     agent_version=task.agent_version,
                     error_category=exc.category.value,
+                )
+            except CompanyBrainServiceError:
+                result = AgentResult(
+                    task_id=task.task_id,
+                    agent_id=selected_agent_id,
+                    status="failed",
+                    duration_ms=round((perf_counter() - task_started) * 1000, 3),
+                    capability=task.capability,
+                    agent_version=task.agent_version,
+                    error_category=AgentErrorCategory.DEPENDENCY_FAILED.value,
+                )
+            except (ValueError, TypeError):
+                logger.exception(
+                    "agent.result_invalid agent_id=%s capability=%s",
+                    selected_agent_id,
+                    task.capability,
+                )
+                result = AgentResult(
+                    task_id=task.task_id,
+                    agent_id=selected_agent_id,
+                    status="failed",
+                    duration_ms=round((perf_counter() - task_started) * 1000, 3),
+                    capability=task.capability,
+                    agent_version=task.agent_version,
+                    error_category=(
+                        AgentErrorCategory.RESULT_INVALID.value
+                        if self.runtime_manager
+                        else "supervisor_agent_failed"
+                    ),
                 )
             except Exception:
                 logger.exception(
@@ -352,7 +421,10 @@ def _resource_usage(task: AgentTask, result: AgentResult) -> AgentResourceUsage:
         "employee_context", "responsibility_lookup", "role_context", "department_context",
     }
     return AgentResourceUsage(
-        inference_calls=int(task.capability in inference_capabilities),
+        inference_calls=int(
+            task.capability in inference_capabilities
+            and result.composition_strategy != "deterministic"
+        ),
         retrieval_calls=int(task.capability in retrieval_capabilities),
         evidence_items=len(result.evidence),
         input_chars=len(json.dumps(task.inputs, ensure_ascii=True)),

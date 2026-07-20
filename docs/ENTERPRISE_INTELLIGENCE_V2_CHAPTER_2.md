@@ -147,3 +147,4 @@ No supervisor construction branch is required when an existing planner capabilit
 
 The runtime is process-local and single-node. Health state and counters reset on restart. Plans are not persisted or replayed. Plugins are application code deployed with CTV ONE, not user-installed extensions. Schema validation uses the current bounded output-contract registry rather than a general schema registry. Queue-wait usage is reported when available from inference instrumentation; retrieval services retain their own deeper resource metrics. Department is not yet present in the immutable authentication snapshot, so department allowlists require an explicit trusted department value from a future identity adapter.
 
+C2.1 adds role-specific timeout semantics, bounded composition strategies, and a hot exact-cache layer. See `ENTERPRISE_INTELLIGENCE_V2_CHAPTER_2_1.md` for timing behavior and release-validation evidence.

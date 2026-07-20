@@ -22,6 +22,7 @@ from app.supervisor.schemas import AgentResult, AgentTask, ExecutionPlan, Superv
 from app.supervisor.service import SupervisorOutcome, executive_supervisor
 from app.supervisor import service as supervisor_service_module
 from app.supervisor import planner as supervisor_planner_module
+from app.supervisor import agents as supervisor_agents_module
 
 
 def user(role=UserRole.employee):
@@ -54,12 +55,36 @@ async def test_semantic_cache_hit_bypasses_supervisor(monkeypatch) -> None:
     async def forbidden_supervisor(**_):
         raise AssertionError("Supervisor must not run for a cache hit")
 
+    def forbidden_resolution(*_args, **_kwargs):
+        raise AssertionError("Runtime resolution must not run for a cache hit")
+
+    async def forbidden_health(*_args, **_kwargs):
+        raise AssertionError("Health polling must not run for a cache hit")
+
+    async def forbidden_ollama(*_args, **_kwargs):
+        raise AssertionError("Ollama must not run for a cache hit")
+
     monkeypatch.setattr(knowledge_service.semantic_cache, "build_lookup", build_lookup)
     monkeypatch.setattr(knowledge_service.semantic_cache, "lookup", lookup)
     monkeypatch.setattr(
         knowledge_service.executive_supervisor,
         "execute_if_needed",
         forbidden_supervisor,
+    )
+    monkeypatch.setattr(
+        knowledge_service.executive_supervisor.runtime_manager,
+        "resolve_capability",
+        forbidden_resolution,
+    )
+    monkeypatch.setattr(
+        knowledge_service.executive_supervisor.runtime_manager,
+        "health_check",
+        forbidden_health,
+    )
+    monkeypatch.setattr(
+        supervisor_agents_module.ollama_service,
+        "chat",
+        forbidden_ollama,
     )
     instrumentation = AskPerformanceInstrumentation()
     answer, _, _ = await answer_with_knowledge(
@@ -334,6 +359,7 @@ async def test_composer_failure_returns_deterministic_partial_result(monkeypatch
     )
     assert outcome.result is not None
     assert outcome.result.partial is True
+    assert outcome.result.metrics["composition_strategy"] == "fallback_deterministic"
     assert outcome.result.final_answer.startswith("Partial enterprise result:")
     assert "Two tasks are overdue" in outcome.result.final_answer
 

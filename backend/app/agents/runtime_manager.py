@@ -356,6 +356,11 @@ class AgentRuntimeManager:
                 "max_evidence_items": settings.ctv_one_agent_default_max_evidence_items,
                 "max_output_chars": settings.ctv_one_agent_default_max_output_chars,
                 "max_queue_wait_seconds": settings.ctv_one_agent_default_max_queue_wait_seconds,
+                "reasoning_timeout_seconds": settings.ctv_one_agent_reasoning_timeout_seconds,
+                "composer_timeout_seconds": settings.ctv_one_agent_composer_timeout_seconds,
+                "composition_max_evidence_items": settings.ctv_one_agent_composition_max_evidence_items,
+                "composition_max_chars_per_result": settings.ctv_one_agent_composition_max_chars_per_result,
+                "composition_max_total_chars": settings.ctv_one_agent_composition_max_total_chars,
             },
             "metrics": agent_runtime_metrics.safe_snapshot(),
         }
