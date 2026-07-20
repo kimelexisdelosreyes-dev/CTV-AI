@@ -16,6 +16,7 @@ from app.api.routes import (
     openai_compat,
     operations,
     orchestrator,
+    runtime,
     version,
 )
 
@@ -34,6 +35,7 @@ api_router.include_router(developer.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(orchestrator.router)
 api_router.include_router(chat.router)
+api_router.include_router(runtime.router)
 
 openai_router = APIRouter()
 openai_router.include_router(openai_compat.router)

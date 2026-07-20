@@ -134,11 +134,16 @@ def test_benchmark_uses_request_scoped_model_override(monkeypatch) -> None:
 
     async def fake_answer_with_knowledge(**kwargs):
         instrumentation = kwargs["instrumentation"]
+        assert kwargs["inference_priority"] == "background"
         calls.append(kwargs["model_override"])
         instrumentation.record_route("general", 0.45, [])
         instrumentation.record_prompt([{"role": "user", "content": "safe count"}])
         instrumentation.add_duration("ollama_request_ms", 0.5)
         instrumentation.record_answer("safe answer")
+        instrumentation.record_metric("inference_queue_enabled", True)
+        instrumentation.record_metric("inference_queue_priority", "background")
+        instrumentation.record_metric("inference_queue_wait_ms", 12.5)
+        instrumentation.record_metric("inference_queue_depth_at_entry", 2)
         return "safe answer", [], None
 
     monkeypatch.setattr(developer, "answer_with_knowledge", fake_answer_with_knowledge)
@@ -157,6 +162,8 @@ def test_benchmark_uses_request_scoped_model_override(monkeypatch) -> None:
     assert calls == ["qwen3:14b"] * 3 + ["qwen3:4b"] * 3
     assert {item.model_name for item in results} == {"qwen3:14b", "qwen3:4b"}
     assert all(item.outcome == "success" for item in results)
+    assert all(item.inference_queue_priority == "background" for item in results)
+    assert all(item.inference_queue_wait_ms == 12.5 for item in results)
 
 
 def test_benchmark_marks_no_evidence_as_skipped(monkeypatch) -> None:

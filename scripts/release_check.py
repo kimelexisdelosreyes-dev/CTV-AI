@@ -61,7 +61,7 @@ def _required_steps(python: str) -> list[CheckStep]:
         ),
         CheckStep(
             "Backend compileall",
-            (python, "-m", "compileall", "-q", "app", "tests"),
+            (python, "-m", "compileall", "-q", "app", "tests", "../scripts"),
             BACKEND_ROOT,
         ),
         CheckStep(

@@ -22,7 +22,7 @@ jobs:
       - name: Backend tests
         run: python -m pytest tests -q
       - name: Compile backend
-        run: python -m compileall -q app tests
+        run: python -m compileall -q app tests ../scripts
       - name: Verify one Alembic head
         run: test "$(python -m alembic -c alembic.ini heads | wc -l)" -eq 1
       - name: Generate offline migration SQL

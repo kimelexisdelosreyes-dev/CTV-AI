@@ -85,6 +85,10 @@ class ModelBenchmarkResultPublic(BaseModel):
     routed_intent: str | None
     skipped_no_evidence: bool
     error_category: str | None = None
+    inference_queue_enabled: bool | None = None
+    inference_queue_priority: str | None = None
+    inference_queue_wait_ms: float | None = None
+    inference_queue_depth_at_entry: int | None = None
 
 
 class ModelBenchmarkResponsePublic(BaseModel):

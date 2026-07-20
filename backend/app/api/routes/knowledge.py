@@ -47,12 +47,18 @@ from app.services.knowledge_service import (
     search_knowledge,
     store_streamed_answer_in_cache,
 )
+from app.services.inference_queue import (
+    InferenceQueueError,
+    inference_queue,
+    priority_for_model_role,
+)
+from app.services.model_router import configured_default_model
 from app.services import conversation_service
 from app.services.performance_event_store import performance_event_store
 from app.services.performance_instrumentation import AskPerformanceInstrumentation
 from app.services.service_errors import CompanyBrainServiceError
 from app.services.conversation_service import ConversationNotFoundError
-from app.services.ollama_service import ollama_service
+from app.services.ollama_service import OllamaInferenceTimeoutError, ollama_service
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 performance_logger = logging.getLogger("ctv_one.performance")
@@ -69,6 +75,20 @@ def log_ask_performance(
 
 def sse_event(event: str, data: dict[str, object]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, separators=(',', ':'))}\n\n"
+
+
+def service_error_headers(
+    exc: CompanyBrainServiceError,
+    request_id: str,
+) -> dict[str, str]:
+    headers = {
+        "X-Request-ID": request_id,
+        "X-Error-Category": exc.category,
+    }
+    retry_after = getattr(exc, "retry_after_seconds", None)
+    if isinstance(retry_after, int) and retry_after > 0:
+        headers["Retry-After"] = str(retry_after)
+    return headers
 
 
 async def append_request_user_message(
@@ -310,10 +330,7 @@ async def ask(
         raise HTTPException(
             status_code=exc.status_code,
             detail=exc.safe_detail,
-            headers={
-                "X-Request-ID": instrumentation.request_id,
-                "X-Error-Category": exc.category,
-            },
+            headers=service_error_headers(exc, instrumentation.request_id),
         ) from exc
     except Exception as exc:
         instrumentation.mark_failure(exc)
@@ -331,6 +348,15 @@ async def ask(
         if not sources and not personalization.operational_context_applied
         else "generated_answer"
     )
+    for metric_name, header_name in (
+        ("inference_queue_wait_ms", "X-Inference-Queue-Wait-Ms"),
+        ("inference_queue_priority", "X-Inference-Priority"),
+        ("inference_queue_depth_at_entry", "X-Inference-Queue-Depth"),
+        ("model_selected", "X-Inference-Model"),
+    ):
+        value = instrumentation.metrics.get(metric_name)
+        if value is not None:
+            http_response.headers[header_name] = str(value)
     return result
 
 
@@ -388,59 +414,147 @@ async def ask_stream(
                 )
 
                 instrumentation.record_stream_started()
-                instrumentation.record_context_ready()
-                yield sse_event(
-                    "context_ready",
-                    {
-                        "selected_context_types": instrumentation.metrics.get(
-                            "required_context_components", []
-                        ),
-                        "retrieval_total_duration_ms": instrumentation.metrics.get(
-                            "retrieval_total_duration_ms", 0.0
-                        ),
-                        "semantic_cache_hit": instrumentation.metrics.get(
-                            "semantic_cache_hit", False
-                        ),
-                        "semantic_cache_hit_type": instrumentation.metrics.get(
-                            "semantic_cache_hit_type", "none"
-                        ),
-                    },
+                selected_model = prepared.model_override or configured_default_model()
+                model_role = (
+                    prepared.model_routing.model_role
+                    if prepared.model_routing is not None
+                    else "default"
                 )
+                context_ready_data = {
+                    "selected_context_types": instrumentation.metrics.get(
+                        "required_context_components", []
+                    ),
+                    "retrieval_total_duration_ms": instrumentation.metrics.get(
+                        "retrieval_total_duration_ms", 0.0
+                    ),
+                    "semantic_cache_hit": instrumentation.metrics.get(
+                        "semantic_cache_hit", False
+                    ),
+                    "semantic_cache_hit_type": instrumentation.metrics.get(
+                        "semantic_cache_hit_type", "none"
+                    ),
+                    "model_name": selected_model,
+                    "model_role": model_role,
+                    "priority": priority_for_model_role(model_role),
+                }
 
                 if prepared.cached_answer is not None:
+                    instrumentation.record_context_ready()
+                    yield sse_event("context_ready", context_ready_data)
                     answer_parts.append(prepared.cached_answer)
                     token_chunk_count += 1
                     instrumentation.record_first_stream_token()
                     yield sse_event("token", {"text": prepared.cached_answer})
                 elif prepared.fallback_answer is not None:
+                    instrumentation.record_context_ready()
+                    yield sse_event("context_ready", context_ready_data)
                     answer_parts.append(prepared.fallback_answer)
                     yield sse_event("token", {"text": prepared.fallback_answer})
                 else:
-                    with instrumentation.measure("ollama_total"):
-                        instrumentation.model_name = (
-                            prepared.model_override or "configured_default"
+                    if isinstance(db, AsyncSession) and db.in_transaction():
+                        await db.rollback()
+                    admission = await inference_queue.submit(
+                        request_id=instrumentation.request_id,
+                        user_id=str(current_user.id),
+                        conversation_id=(
+                            str(request.conversation_id)
+                            if request.conversation_id
+                            else None
+                        ),
+                        model_name=selected_model,
+                        model_role=model_role,
+                        streaming=True,
+                        estimated_cost_class=model_role,
+                    )
+                    inference_queue.record_result(
+                        instrumentation,
+                        admission.initial_result,
+                    )
+                    if admission.initial_result.queued:
+                        yield sse_event(
+                            "queue_status",
+                            {
+                                "queued": True,
+                                "queue_position": admission.initial_result.queue_position,
+                                "estimated_wait_seconds": (
+                                    admission.initial_result.estimated_wait_seconds
+                                ),
+                                "priority": admission.initial_result.priority,
+                                "model_role": model_role,
+                            },
                         )
-                        instrumentation.record_inference_start()
-                        async for chunk in ollama_service.stream_chat(
-                            prepared.messages,
-                            model=prepared.model_override,
-                        ):
-                            if await http_request.is_disconnected():
-                                instrumentation.record_stream_completion(
-                                    token_chunk_count=token_chunk_count,
-                                    answer="".join(answer_parts),
-                                    cancelled=True,
+                    try:
+                        lease = await admission.wait(
+                            cancellation_check=http_request.is_disconnected
+                        )
+                    except InferenceQueueError as exc:
+                        if exc.result is not None:
+                            inference_queue.record_result(
+                                instrumentation,
+                                exc.result,
+                            )
+                        raise
+                    inference_queue.record_lease(instrumentation, lease)
+                    instrumentation.record_context_ready()
+                    yield sse_event("context_ready", context_ready_data)
+                    lease_cancelled = False
+                    try:
+                        with instrumentation.measure("ollama_total"):
+                            instrumentation.model_name = selected_model
+                            instrumentation.record_inference_start()
+                            try:
+                                async with asyncio.timeout(
+                                    inference_queue.config.default_timeout_seconds
+                                ):
+                                    async for chunk in ollama_service.stream_chat(
+                                        prepared.messages,
+                                        model=selected_model,
+                                    ):
+                                        if await http_request.is_disconnected():
+                                            lease_cancelled = True
+                                            instrumentation.record_stream_completion(
+                                                token_chunk_count=token_chunk_count,
+                                                answer="".join(answer_parts),
+                                                cancelled=True,
+                                            )
+                                            instrumentation.mark_failure(
+                                                asyncio.CancelledError()
+                                            )
+                                            log_ask_performance(
+                                                instrumentation,
+                                                "cancelled",
+                                            )
+                                            return
+                                        if chunk.text:
+                                            answer_parts.append(chunk.text)
+                                            token_chunk_count += 1
+                                            instrumentation.record_first_stream_token()
+                                            yield sse_event(
+                                                "token",
+                                                {"text": chunk.text},
+                                            )
+                                        if chunk.done and chunk.metadata:
+                                            instrumentation.record_ollama_metrics(
+                                                chunk.metadata
+                                            )
+                            except TimeoutError as exc:
+                                instrumentation.record_metric(
+                                    "inference_timed_out",
+                                    True,
                                 )
-                                instrumentation.mark_failure(asyncio.CancelledError())
-                                log_ask_performance(instrumentation, "cancelled")
-                                return
-                            if chunk.text:
-                                answer_parts.append(chunk.text)
-                                token_chunk_count += 1
-                                instrumentation.record_first_stream_token()
-                                yield sse_event("token", {"text": chunk.text})
-                            if chunk.done and chunk.metadata:
-                                instrumentation.record_ollama_metrics(chunk.metadata)
+                                raise OllamaInferenceTimeoutError() from exc
+                    except asyncio.CancelledError:
+                        lease_cancelled = True
+                        instrumentation.record_metric("inference_cancelled", True)
+                        raise
+                    finally:
+                        lease_duration_ms = await lease.release(
+                            cancelled=lease_cancelled
+                        )
+                        instrumentation.record_metric(
+                            "inference_lease_duration_ms",
+                            lease_duration_ms,
+                        )
 
                 answer = "".join(answer_parts)
                 if not answer.strip():
@@ -479,6 +593,9 @@ async def ask_stream(
                             "first_token_latency_ms"
                         ),
                         "duration_ms": round((perf_counter() - stream_started) * 1000, 3),
+                        "inference_queue_wait_ms": instrumentation.metrics.get(
+                            "inference_queue_wait_ms", 0.0
+                        ),
                     },
                 )
         except asyncio.CancelledError:

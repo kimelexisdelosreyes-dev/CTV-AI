@@ -10,6 +10,7 @@ from app.connectors.bootstrap import register_builtin_connectors
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.services.embedding_service import embedding_service
+from app.services.inference_queue import inference_queue
 from app.services.operations_snapshot_service import operations_sync_loop
 
 
@@ -17,6 +18,7 @@ from app.services.operations_snapshot_service import operations_sync_loop
 async def lifespan(_: FastAPI):
     configure_logging()
     register_builtin_connectors()
+    await inference_queue.start()
     readiness = await embedding_service.readiness()
     if readiness.get("status") != "healthy":
         logging.getLogger(__name__).warning(
@@ -31,6 +33,7 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
+        await inference_queue.shutdown()
         sync_stop.set()
         if sync_task is not None:
             sync_task.cancel()

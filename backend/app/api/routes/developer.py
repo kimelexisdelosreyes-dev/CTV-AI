@@ -20,6 +20,7 @@ from app.schemas.developer import (
 )
 from app.services.embedding_service import EmbeddingServiceError
 from app.services.knowledge_service import answer_with_knowledge
+from app.services.inference_queue import InferenceQueueError, inference_queue
 from app.services.model_router import configured_default_model
 from app.services.ollama_service import OllamaServiceError, ollama_service
 from app.services.performance_event_store import performance_event_store
@@ -178,13 +179,16 @@ async def run_model_benchmark(
     db: AsyncSession,
     warmup: Callable[[str], Awaitable[None]] | None = None,
 ) -> list[ModelBenchmarkResultPublic]:
-    warmup_model = warmup or _warmup_model
+    async def queued_warmup(model_name: str) -> None:
+        await _warmup_model(model_name, str(current_user.id))
+
+    warmup_model = warmup or queued_warmup
     results: list[ModelBenchmarkResultPublic] = []
 
     for model_name in (default_model, comparison_model):
         try:
             await warmup_model(model_name)
-        except (OllamaServiceError, EmbeddingServiceError):
+        except (OllamaServiceError, EmbeddingServiceError, InferenceQueueError):
             results.extend(
                 warmup_error_results(
                     model_name=model_name,
@@ -215,8 +219,20 @@ async def run_model_benchmark(
     return results
 
 
-async def _warmup_model(model_name: str) -> None:
-    await ollama_service.chat(WARMUP_MESSAGES, model=model_name)
+async def _warmup_model(model_name: str, user_id: str) -> None:
+    admission = await inference_queue.submit(
+        user_id=user_id,
+        model_name=model_name,
+        model_role="background",
+        priority="background",
+        estimated_cost_class="background",
+    )
+    lease = await admission.wait()
+    try:
+        async with asyncio.timeout(inference_queue.config.default_timeout_seconds):
+            await ollama_service.chat(WARMUP_MESSAGES, model=model_name)
+    finally:
+        await lease.release()
 
 
 def warmup_error_results(
@@ -263,14 +279,15 @@ async def run_benchmark_case(
                 db=db,
                 instrumentation=instrumentation,
                 model_override=model_name,
+                inference_priority="background",
             )
-    except (OllamaServiceError, EmbeddingServiceError):
+    except (OllamaServiceError, EmbeddingServiceError, InferenceQueueError) as exc:
         return benchmark_result_from_instrumentation(
             model_name=model_name,
             case_label=case_label,
             instrumentation=instrumentation,
             outcome="error",
-            error_category="ai_request_error",
+            error_category=getattr(exc, "category", "ai_request_error"),
         )
     except Exception:
         return benchmark_result_from_instrumentation(
@@ -320,4 +337,16 @@ def benchmark_result_from_instrumentation(
         routed_intent=instrumentation.routed_intent,
         skipped_no_evidence=skipped_no_evidence,
         error_category=error_category,
+        inference_queue_enabled=instrumentation.metrics.get(
+            "inference_queue_enabled"
+        ),
+        inference_queue_priority=instrumentation.metrics.get(
+            "inference_queue_priority"
+        ),
+        inference_queue_wait_ms=instrumentation.metrics.get(
+            "inference_queue_wait_ms"
+        ),
+        inference_queue_depth_at_entry=instrumentation.metrics.get(
+            "inference_queue_depth_at_entry"
+        ),
     )

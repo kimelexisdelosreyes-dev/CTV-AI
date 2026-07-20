@@ -21,13 +21,18 @@ from app.services.context_retrieval_coordinator import context_retrieval_coordin
 from app.services.document_parser import SUPPORTED_EXTENSIONS
 from app.services.embedding_service import embedding_service
 from app.services.intelligence_router import intelligence_router
+from app.services.inference_queue import (
+    InferencePriority,
+    InferenceQueueError,
+    inference_queue,
+)
 from app.services.knowledge_jobs import process_document_job
 from app.services.model_router import (
     ModelRoutingDecision,
     ModelRoutingInput,
     model_router,
 )
-from app.services.ollama_service import ollama_service
+from app.services.ollama_service import OllamaInferenceTimeoutError, ollama_service
 from app.services.performance_instrumentation import (
     AskPerformanceInstrumentation,
     estimate_input_tokens,
@@ -375,6 +380,7 @@ async def answer_with_knowledge(
     model_override: str | None = None,
     conversation_id: uuid.UUID | None = None,
     prepare_for_stream: bool = False,
+    inference_priority: InferencePriority | None = None,
 ) -> tuple[str, list[KnowledgeSource], ContextMetadata] | PreparedKnowledgeAnswer:
     router_timer = (
         instrumentation.measure("intelligence_router")
@@ -445,6 +451,7 @@ async def answer_with_knowledge(
         instrumentation.record_metric("ollama_skipped_due_to_cache", cache_result.hit)
         instrumentation.record_metric("semantic_cache_entry_age_seconds", cache_result.age_seconds)
     if cache_result.hit and cache_result.answer and cache_result.personalization:
+        inference_queue.record_cache_bypass(instrumentation)
         cached_sources = list(cache_result.sources)
         if instrumentation:
             instrumentation.model_name = cache_result.selected_model
@@ -741,23 +748,76 @@ async def answer_with_knowledge(
             cache_result=cache_result,
         )
 
+    if isinstance(db, AsyncSession) and db.in_transaction():
+        # Retrieval may autobegin a read transaction. Never retain it while queued.
+        await db.rollback()
+    admission = await inference_queue.submit(
+        request_id=instrumentation.request_id if instrumentation else None,
+        user_id=str(
+            getattr(
+                current_user,
+                "id",
+                instrumentation.request_id if instrumentation else uuid.uuid4(),
+            )
+        ),
+        conversation_id=str(conversation_id) if conversation_id else None,
+        model_name=selected_model,
+        model_role=routing_decision.model_role,
+        priority=inference_priority,
+        streaming=False,
+        estimated_cost_class=routing_decision.model_role,
+    )
+    inference_queue.record_result(instrumentation, admission.initial_result)
+    try:
+        lease = await admission.wait()
+    except InferenceQueueError as exc:
+        if exc.result is not None:
+            inference_queue.record_result(instrumentation, exc.result)
+        raise
+    inference_queue.record_lease(instrumentation, lease)
+
     ollama_timer = (
         instrumentation.measure("ollama_total")
         if instrumentation
         else nullcontext()
     )
-    with ollama_timer:
+    cancelled = False
+    try:
+        with ollama_timer:
+            if instrumentation:
+                instrumentation.record_inference_start()
+            try:
+                async with asyncio.timeout(
+                    inference_queue.config.default_timeout_seconds
+                ):
+                    if instrumentation:
+                        answer, ollama_payload = await ollama_service.chat(
+                            messages,
+                            model=selected_model,
+                            return_metadata=True,
+                        )
+                        instrumentation.record_ollama_metrics(ollama_payload)
+                    else:
+                        answer = await ollama_service.chat(
+                            messages,
+                            model=selected_model,
+                        )
+            except TimeoutError as exc:
+                if instrumentation:
+                    instrumentation.record_metric("inference_timed_out", True)
+                raise OllamaInferenceTimeoutError() from exc
+    except asyncio.CancelledError:
+        cancelled = True
         if instrumentation:
-            instrumentation.record_inference_start()
+            instrumentation.record_metric("inference_cancelled", True)
+        raise
+    finally:
+        lease_duration_ms = await lease.release(cancelled=cancelled)
         if instrumentation:
-            answer, ollama_payload = await ollama_service.chat(
-                messages,
-                model=selected_model,
-                return_metadata=True,
+            instrumentation.record_metric(
+                "inference_lease_duration_ms",
+                lease_duration_ms,
             )
-            instrumentation.record_ollama_metrics(ollama_payload)
-        else:
-            answer = await ollama_service.chat(messages, model=selected_model)
 
     if instrumentation:
         instrumentation.record_answer(answer)

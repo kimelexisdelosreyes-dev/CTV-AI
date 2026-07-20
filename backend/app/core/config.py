@@ -94,6 +94,17 @@ class Settings(BaseSettings):
     ctv_one_semantic_cache_max_candidates: int = 5
     ctv_one_semantic_cache_prompt_policy_version: str = "p2.5-v1"
     ctv_one_semantic_cache_router_policy_version: str = "p2.4.1-v1"
+    ctv_one_inference_queue_enabled: bool = True
+    ctv_one_inference_global_concurrency: int = 2
+    ctv_one_inference_global_queue_size: int = 20
+    ctv_one_inference_default_timeout_seconds: float = 180.0
+    ctv_one_inference_queue_wait_timeout_seconds: float = 120.0
+    ctv_one_inference_model_qwen3_8b_concurrency: int = 2
+    ctv_one_inference_model_deepseek_r1_14b_concurrency: int = 1
+    ctv_one_inference_per_user_active_limit: int = 1
+    ctv_one_inference_per_user_queue_limit: int = 3
+    ctv_one_inference_shutdown_grace_seconds: float = 30.0
+    ctv_one_inference_priority_aging_seconds: float = 30.0
 
     model_config = SettingsConfigDict(
         env_file=".env",

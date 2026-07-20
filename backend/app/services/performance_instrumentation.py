@@ -439,6 +439,7 @@ class AskPerformanceInstrumentation:
             metrics.setdefault("tokens_per_second", token_rate)
 
         total_seconds = self.stage_durations.get("total_request", 0.0)
+        metrics.setdefault("total_duration_ms", rounded_ms(total_seconds * 1000))
 
         return {
             "event": "company_brain_performance",
