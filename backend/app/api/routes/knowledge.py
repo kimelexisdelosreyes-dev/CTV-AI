@@ -58,10 +58,12 @@ from app.services.performance_event_store import performance_event_store
 from app.services.performance_instrumentation import AskPerformanceInstrumentation
 from app.services.service_errors import CompanyBrainServiceError
 from app.services.conversation_service import ConversationNotFoundError
+from app.supervisor.permissions import snapshot_authenticated_user
 from app.services.ollama_service import OllamaInferenceTimeoutError, ollama_service
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 performance_logger = logging.getLogger("ctv_one.performance")
+application_logger = logging.getLogger("ctv_one.knowledge")
 
 
 def log_ask_performance(
@@ -272,6 +274,7 @@ async def ask(
     db: AsyncSession = Depends(get_db),
 ):
     instrumentation = AskPerformanceInstrumentation()
+    authenticated_user = snapshot_authenticated_user(current_user)
     user_message_saved = False
 
     try:
@@ -283,7 +286,7 @@ async def ask(
 
             if request.conversation_id is not None:
                 try:
-                    await append_request_user_message(db, current_user, request)
+                    await append_request_user_message(db, authenticated_user, request)
                 except ConversationNotFoundError as exc:
                     raise HTTPException(
                         status_code=404,
@@ -297,7 +300,7 @@ async def ask(
                 category=selected,
                 assistant=request.assistant,
                 use_employee_context=request.use_employee_context,
-                current_user=current_user,
+                current_user=authenticated_user,
                 db=db,
                 instrumentation=instrumentation,
                 conversation_id=request.conversation_id,
@@ -314,7 +317,7 @@ async def ask(
             if request.conversation_id is not None:
                 await conversation_service.append_assistant_message_for_request(
                     db,
-                    current_user,
+                    authenticated_user,
                     request.conversation_id,
                     answer,
                 )
@@ -322,7 +325,7 @@ async def ask(
         if request.conversation_id is not None and user_message_saved:
             await conversation_service.append_assistant_message_for_request(
                 db,
-                current_user,
+                authenticated_user,
                 request.conversation_id,
                 exc.safe_detail,
             )
@@ -336,7 +339,18 @@ async def ask(
     except Exception as exc:
         instrumentation.mark_failure(exc)
         log_ask_performance(instrumentation, "error")
-        raise
+        application_logger.exception(
+            "Unexpected Company Brain error request_id=%s category=ai_request_error",
+            instrumentation.request_id,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Company Brain could not complete this request.",
+            headers={
+                "X-Request-ID": instrumentation.request_id,
+                "X-Error-Category": "ai_request_error",
+            },
+        ) from exc
 
     instrumentation.mark_success()
     log_ask_performance(instrumentation, "success")
@@ -369,6 +383,7 @@ async def ask_stream(
     db: AsyncSession = Depends(get_db),
 ):
     """Stream visible assistant text only; prompts and retrieved context stay server-side."""
+    authenticated_user = snapshot_authenticated_user(current_user)
 
     async def event_stream():
         instrumentation = AskPerformanceInstrumentation()
@@ -392,7 +407,7 @@ async def ask_stream(
                 selected = resolved_collection(request.collection, request.category)
                 if request.conversation_id is not None:
                     try:
-                        await append_request_user_message(db, current_user, request)
+                        await append_request_user_message(db, authenticated_user, request)
                     except ConversationNotFoundError as exc:
                         raise CompanyBrainServiceError(
                             category="conversation_not_found",
@@ -418,7 +433,7 @@ async def ask_stream(
                         category=selected,
                         assistant=request.assistant,
                         use_employee_context=request.use_employee_context,
-                        current_user=current_user,
+                        current_user=authenticated_user,
                         db=db,
                         instrumentation=instrumentation,
                         conversation_id=request.conversation_id,
@@ -507,7 +522,7 @@ async def ask_stream(
                         await db.rollback()
                     admission = await inference_queue.submit(
                         request_id=instrumentation.request_id,
-                        user_id=str(current_user.id),
+                        user_id=str(authenticated_user.id),
                         conversation_id=(
                             str(request.conversation_id)
                             if request.conversation_id
@@ -625,7 +640,7 @@ async def ask_stream(
                 if request.conversation_id is not None:
                     await conversation_service.append_assistant_message_for_request(
                         db,
-                        current_user,
+                        authenticated_user,
                         request.conversation_id,
                         answer,
                     )
@@ -671,8 +686,16 @@ async def ask_stream(
                 "error",
                 {"error_category": exc.category, "safe_detail": exc.safe_detail},
             )
-        except Exception:
-            error = CompanyBrainServiceError()
+        except Exception as exc:
+            application_logger.exception(
+                "Unexpected Company Brain stream error request_id=%s category=ai_request_error",
+                instrumentation.request_id,
+            )
+            error = CompanyBrainServiceError(
+                category="ai_request_error",
+                status_code=500,
+                safe_detail="Company Brain could not complete this request.",
+            )
             instrumentation.record_stream_completion(
                 token_chunk_count=token_chunk_count,
                 answer="".join(answer_parts),

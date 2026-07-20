@@ -8,7 +8,7 @@ from time import perf_counter
 from app.core.config import settings
 from app.supervisor.agents import AgentExecutionContext, build_agent_registry
 from app.supervisor.execution_engine import ExecutionEngine, SupervisorEventCallback
-from app.supervisor.permissions import permissions_for_user
+from app.supervisor.permissions import permissions_for_user, snapshot_authenticated_user
 from app.supervisor.planner import (
     SupervisorPlanError,
     deterministic_plan,
@@ -64,6 +64,7 @@ class ExecutiveSupervisor:
         knowledge_fetcher,
         event_callback: SupervisorEventCallback | None = None,
     ) -> SupervisorOutcome:
+        current_user = snapshot_authenticated_user(current_user)
         total_started = perf_counter()
         mode, domains, needs_reasoning = select_mode(
             question,
@@ -280,6 +281,7 @@ class ExecutiveSupervisor:
                 "max_tasks": settings.ctv_one_supervisor_max_tasks,
                 "max_depth": settings.ctv_one_supervisor_max_depth,
                 "max_parallel_tasks": settings.ctv_one_supervisor_max_parallel_tasks,
+                "planner_timeout_seconds": settings.ctv_one_supervisor_planner_timeout_seconds,
                 "task_timeout_seconds": settings.ctv_one_supervisor_task_timeout_seconds,
                 "total_timeout_seconds": settings.ctv_one_supervisor_total_timeout_seconds,
             },

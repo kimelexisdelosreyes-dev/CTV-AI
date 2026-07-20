@@ -280,6 +280,7 @@ async def run_benchmark_case(
                 instrumentation=instrumentation,
                 model_override=model_name,
                 inference_priority="background",
+                supervisor_mode="direct",
             )
     except (OllamaServiceError, EmbeddingServiceError, InferenceQueueError) as exc:
         return benchmark_result_from_instrumentation(

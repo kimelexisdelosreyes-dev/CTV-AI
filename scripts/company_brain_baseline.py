@@ -14,8 +14,9 @@ from urllib.request import Request, urlopen
 
 
 DEFAULT_TIMEOUT_SECONDS = 420
-DEFAULT_OUTPUT_DIR = Path("benchmarks") / "reports"
-DEFAULT_PERFORMANCE_LOG_PATH = Path("logs") / "performance.jsonl"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_OUTPUT_DIR = REPO_ROOT / "benchmarks" / "reports"
+DEFAULT_PERFORMANCE_LOG_PATH = REPO_ROOT / "logs" / "performance.jsonl"
 ENDPOINT_PATH = "/api/v1/knowledge/ask"
 STREAM_ENDPOINT_PATH = "/api/v1/knowledge/ask/stream"
 
@@ -114,6 +115,10 @@ SUPERVISOR_CASE_MODES = {
         }
     },
 }
+SUPERVISOR_CASE_MODES["supervisor_planner_fallback"] = "direct"
+BENCHMARK_LOCAL_FAILURE_INJECTIONS = {
+    "supervisor_planner_fallback": "planner_failure",
+}
 
 PARAPHRASES = {
     "operations_priorities": "Which company operations need the most attention today?",
@@ -209,6 +214,21 @@ def stream_benchmark_url(api_root: str) -> str:
     return ask_url.removesuffix(ENDPOINT_PATH) + STREAM_ENDPOINT_PATH
 
 
+def stream_start_request_id(response_body: str) -> str | None:
+    event_name = ""
+    for line in response_body.splitlines():
+        if line.startswith("event: "):
+            event_name = line.removeprefix("event: ").strip()
+        elif event_name == "start" and line.startswith("data: "):
+            try:
+                payload = json.loads(line.removeprefix("data: "))
+            except json.JSONDecodeError:
+                return None
+            request_id = payload.get("request_id") if isinstance(payload, dict) else None
+            return request_id if isinstance(request_id, str) else None
+    return None
+
+
 def call_prompt(
     api_root: str,
     bearer_token: str,
@@ -240,6 +260,7 @@ def call_prompt(
     )
 
     started_at = perf_counter()
+    streamed_request_id = None
     try:
         with urlopen(request, timeout=timeout_seconds) as response:
             response_body = response.read().decode("utf-8")
@@ -253,6 +274,8 @@ def call_prompt(
             ok = 200 <= status_code < 300 and (
                 not streaming or "event: done" in response_body
             )
+            if streaming:
+                streamed_request_id = stream_start_request_id(response_body)
             error = None
     except HTTPError as exc:
         status_code = exc.code
@@ -276,7 +299,9 @@ def call_prompt(
     sources = data.get("sources") if isinstance(data, dict) else None
     personalization = data.get("personalization") if isinstance(data, dict) else None
     detail = data.get("detail") if isinstance(data, dict) else None
-    backend_request_id = headers.get("X-Request-ID") if headers else None
+    backend_request_id = (
+        headers.get("X-Request-ID") if headers else None
+    ) or streamed_request_id
     error_category = headers.get("X-Error-Category") if headers else None
     result_type = headers.get("X-Result-Type") if headers else None
     if not ok:
@@ -354,6 +379,9 @@ def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
             config.performance_log_path,
             supervisor_mode=SUPERVISOR_CASE_MODES.get(case_label, "auto"),
             streaming=case_label == "supervisor_streaming",
+        )
+        result["benchmark_failure_injection"] = BENCHMARK_LOCAL_FAILURE_INJECTIONS.get(
+            case_label
         )
         selected_model = result.get("model_selected")
         model_known = isinstance(selected_model, str) and bool(selected_model)
@@ -561,6 +589,7 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
             "safe_detail",
             "backend_request_id",
             "result_type",
+            "benchmark_failure_injection",
             "selected_context_types",
             "parallel_retrieval_used",
             "knowledge_retrieval_duration_ms",

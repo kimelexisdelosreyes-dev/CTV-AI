@@ -215,7 +215,7 @@ async def llm_plan(
     lease = await admission.wait()
     inference_queue.record_lease(instrumentation, lease)
     try:
-        async with asyncio.timeout(settings.ctv_one_supervisor_task_timeout_seconds):
+        async with asyncio.timeout(settings.ctv_one_supervisor_planner_timeout_seconds):
             response = await ollama_service.chat(
                 [
                     {

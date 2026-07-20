@@ -114,6 +114,20 @@ def test_benchmark_url_accepts_api_root_or_full_endpoint() -> None:
     assert benchmark.benchmark_url("http://127.0.0.1:8000/api/v1/knowledge/ask") == (
         "http://127.0.0.1:8000/api/v1/knowledge/ask"
     )
+    assert benchmark.DEFAULT_PERFORMANCE_LOG_PATH.is_absolute()
+    assert benchmark.DEFAULT_OUTPUT_DIR.is_absolute()
+
+
+def test_stream_start_request_id_is_extracted_safely() -> None:
+    benchmark = load_benchmark_module()
+    body = (
+        "event: start\n"
+        'data: {"request_id":"request-stream","conversation_id":null}\n\n'
+        "event: done\n"
+        'data: {"answer_chars":10}\n\n'
+    )
+    assert benchmark.stream_start_request_id(body) == "request-stream"
+    assert benchmark.stream_start_request_id("event: start\ndata: not-json\n") is None
 
 
 def test_run_benchmark_records_run_relative_model_switch_metadata(
@@ -233,3 +247,40 @@ def test_result_type_for_model_errors() -> None:
     assert benchmark.result_type_for_error("model_inference_truncated") == (
         "truncated_model_response"
     )
+
+
+def test_supervisor_benchmark_cases_and_metrics_are_present() -> None:
+    benchmark = load_benchmark_module()
+    assert len(benchmark.SUPERVISOR_PROMPTS) == 10
+    labels = {label for label, _ in benchmark.SUPERVISOR_PROMPTS}
+    assert "supervisor_direct_knowledge" in labels
+    assert "supervisor_streaming" in labels
+    assert "supervisor_optional_partial_failure" in labels
+    assert benchmark.SUPERVISOR_CASE_MODES["supervisor_planner_fallback"] == "direct"
+    assert benchmark.BENCHMARK_LOCAL_FAILURE_INJECTIONS == {
+        "supervisor_planner_fallback": "planner_failure"
+    }
+
+    measured = benchmark.prompt_metrics_from_event(
+        {
+            "metrics": {
+                "supervisor_mode": "supervised",
+                "supervisor_planner_type": "deterministic",
+                "supervisor_plan_task_count": 3,
+                "supervisor_agents_selected": ["knowledge_agent", "operations_agent"],
+                "supervisor_planning_duration_ms": 2.0,
+                "supervisor_execution_duration_ms": 8.0,
+                "supervisor_composition_duration_ms": 3.0,
+                "supervisor_total_duration_ms": 13.0,
+                "supervisor_parallelism_peak": 2,
+                "supervisor_fallback_used": False,
+                "supervisor_partial_result": False,
+                "inference_queue_wait_ms": 1.0,
+                "semantic_cache_hit": False,
+            }
+        }
+    )
+    assert measured["supervisor_mode"] == "supervised"
+    assert measured["supervisor_task_count"] == 3
+    assert measured["supervisor_parallelism_peak"] == 2
+    assert measured["inference_queue_wait_ms"] == 1.0

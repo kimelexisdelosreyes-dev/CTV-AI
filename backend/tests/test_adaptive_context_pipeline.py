@@ -1,4 +1,5 @@
 import asyncio
+import uuid
 from types import SimpleNamespace
 
 import pytest
@@ -6,6 +7,7 @@ import pytest
 from app.schemas.context import ContextBundle, ContextMetadata
 from app.schemas.knowledge import KnowledgeSource
 from app.core.config import settings
+from app.db.models.user import UserRole
 from app.services import context_retrieval_coordinator as coordinator_module
 from app.services import knowledge_service
 from app.services.knowledge_service import answer_with_knowledge
@@ -27,6 +29,14 @@ def source() -> KnowledgeSource:
         page_number=1,
         text="Approved policy text.",
         score=0.95,
+    )
+
+
+def authenticated_user():
+    return SimpleNamespace(
+        id=uuid.uuid4(),
+        full_name="Adaptive Context User",
+        role=UserRole.employee,
     )
 
 
@@ -75,7 +85,7 @@ async def test_knowledge_only_route_excludes_employee_and_operations(monkeypatch
         category=None,
         assistant="general",
         use_employee_context=True,
-        current_user=SimpleNamespace(),
+        current_user=authenticated_user(),
         db=None,
         instrumentation=instrumentation,
     )
@@ -134,7 +144,7 @@ async def test_operations_only_route_excludes_knowledge_and_employee(monkeypatch
         category=None,
         assistant="general",
         use_employee_context=True,
-        current_user=SimpleNamespace(),
+        current_user=authenticated_user(),
         db=None,
         instrumentation=instrumentation,
     )
@@ -188,7 +198,7 @@ async def test_employee_only_route_excludes_unrelated_context(monkeypatch) -> No
         category=None,
         assistant="general",
         use_employee_context=True,
-        current_user=SimpleNamespace(),
+        current_user=authenticated_user(),
         db=None,
         instrumentation=instrumentation,
     )
@@ -235,7 +245,7 @@ async def test_mixed_route_preserves_deterministic_prompt_order(monkeypatch) -> 
         category=None,
         assistant="general",
         use_employee_context=True,
-        current_user=SimpleNamespace(),
+        current_user=authenticated_user(),
         db=None,
         instrumentation=AskPerformanceInstrumentation(),
     )

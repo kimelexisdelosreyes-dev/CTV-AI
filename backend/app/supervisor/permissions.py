@@ -1,3 +1,6 @@
+from dataclasses import dataclass
+from uuid import UUID
+
 from app.db.models.user import User, UserRole
 
 
@@ -26,7 +29,26 @@ CAPABILITY_PERMISSIONS: dict[str, frozenset[str]] = {
 }
 
 
-def permissions_for_user(user: User) -> set[str]:
+@dataclass(frozen=True)
+class AuthenticatedUserContext:
+    id: UUID
+    full_name: str
+    role: UserRole
+
+
+def snapshot_authenticated_user(
+    user: User | AuthenticatedUserContext,
+) -> AuthenticatedUserContext:
+    if isinstance(user, AuthenticatedUserContext):
+        return user
+    return AuthenticatedUserContext(
+        id=user.id,
+        full_name=getattr(user, "full_name", "Authenticated user"),
+        role=getattr(user, "role", UserRole.employee),
+    )
+
+
+def permissions_for_user(user: User | AuthenticatedUserContext) -> set[str]:
     permissions = {
         "knowledge.read",
         "operations.read",

@@ -84,6 +84,7 @@ class KnowledgeAskRequest(BaseModel):
         "coder",
     ] = "general"
     use_employee_context: bool = True
+    supervisor_mode: Literal["auto", "direct", "supervised"] = "auto"
 
 
 class KnowledgeAskResponse(BaseModel):

@@ -1,4 +1,5 @@
 import asyncio
+from time import perf_counter
 import uuid
 from types import SimpleNamespace
 
@@ -20,6 +21,7 @@ from app.services.semantic_cache import SemanticCacheResult
 from app.supervisor.schemas import AgentResult, AgentTask, ExecutionPlan, SupervisorResult
 from app.supervisor.service import SupervisorOutcome, executive_supervisor
 from app.supervisor import service as supervisor_service_module
+from app.supervisor import planner as supervisor_planner_module
 
 
 def user(role=UserRole.employee):
@@ -106,6 +108,88 @@ async def test_planner_failure_falls_back_to_direct(monkeypatch) -> None:
     assert outcome.mode == "fallback_direct"
     assert instrumentation.metrics["supervisor_fallback_used"] is True
     assert "raw planner output" not in str(instrumentation.metrics)
+
+
+@pytest.mark.asyncio
+async def test_runtime_planner_timeout_falls_back_without_task_timeout_delay(
+    monkeypatch,
+) -> None:
+    released = False
+
+    class Lease:
+        wait_duration_ms = 0.0
+        queue_depth_at_entry = 0
+        active_global = 1
+        active_for_model = 1
+        user_active_count = 1
+        model_limit = 1
+        priority = "interactive_reasoning"
+
+        async def release(self, **_):
+            nonlocal released
+            released = True
+
+    class Admission:
+        initial_result = SimpleNamespace(
+            admitted=True,
+            rejected=False,
+            queued=False,
+            priority="interactive_reasoning",
+            queue_position=None,
+            queue_depth_at_entry=0,
+            wait_duration_ms=0.0,
+            rejection_reason=None,
+            retry_after_seconds=None,
+        )
+
+        async def wait(self):
+            return Lease()
+
+    async def submit(**_):
+        return Admission()
+
+    async def slow_planner(*_, **__):
+        await asyncio.sleep(1)
+
+    monkeypatch.setattr(settings, "ctv_one_supervisor_enabled", True)
+    monkeypatch.setattr(settings, "ctv_one_supervisor_planner_timeout_seconds", 0.01)
+    monkeypatch.setattr(supervisor_planner_module.inference_queue, "submit", submit)
+    monkeypatch.setattr(
+        supervisor_planner_module.inference_queue,
+        "record_result",
+        lambda *_: None,
+    )
+    monkeypatch.setattr(
+        supervisor_planner_module.inference_queue,
+        "record_lease",
+        lambda *_: None,
+    )
+    monkeypatch.setattr(supervisor_planner_module.ollama_service, "chat", slow_planner)
+    instrumentation = AskPerformanceInstrumentation()
+    started = perf_counter()
+    outcome = await executive_supervisor.execute_if_needed(
+        question="Prepare the bounded response.",
+        requested_mode="supervised",
+        request_id="request-timeout",
+        conversation_id=None,
+        streaming=False,
+        route=SimpleNamespace(),
+        requirements=SimpleNamespace(
+            include_knowledge=False,
+            include_operations=False,
+            include_employee=False,
+        ),
+        current_user=user(),
+        db=object(),
+        top_k=5,
+        instrumentation=instrumentation,
+        knowledge_fetcher=None,
+    )
+    elapsed = perf_counter() - started
+    assert outcome.mode == "fallback_direct"
+    assert elapsed < 0.2
+    assert released is True
+    assert instrumentation.metrics["supervisor_error_category"] == "supervisor_plan_invalid"
 
 
 @pytest.mark.asyncio

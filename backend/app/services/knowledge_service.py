@@ -41,6 +41,7 @@ from app.services.performance_instrumentation import (
 from app.services.semantic_cache import SemanticCacheResult, semantic_cache
 from app.services.vector_store import vector_store
 from app.supervisor.execution_engine import SupervisorEventCallback
+from app.supervisor.permissions import snapshot_authenticated_user
 from app.supervisor.schemas import RequestedSupervisorMode, SupervisorResult
 from app.supervisor.service import executive_supervisor
 
@@ -389,6 +390,7 @@ async def answer_with_knowledge(
     supervisor_mode: RequestedSupervisorMode = "auto",
     supervisor_event_callback: SupervisorEventCallback | None = None,
 ) -> tuple[str, list[KnowledgeSource], ContextMetadata] | PreparedKnowledgeAnswer:
+    authenticated_user = snapshot_authenticated_user(current_user)
     router_timer = (
         instrumentation.measure("intelligence_router")
         if instrumentation
@@ -428,7 +430,7 @@ async def answer_with_knowledge(
             question=question,
             route_intent=route.intent,
             requirements=requirements,
-            current_user_id=current_user.id,
+            current_user_id=authenticated_user.id,
             conversation_id=conversation_id,
             assistant=assistant,
             category=category,
@@ -484,7 +486,7 @@ async def answer_with_knowledge(
         streaming=prepare_for_stream,
         route=route,
         requirements=requirements,
-        current_user=current_user,
+        current_user=authenticated_user,
         db=db,
         top_k=top_k,
         instrumentation=instrumentation,
@@ -530,7 +532,7 @@ async def answer_with_knowledge(
             routed_collections=routed_collections,
             requirements=requirements,
             route=route,
-            current_user=current_user,
+            current_user=authenticated_user,
             db=db,
             conversation_id=conversation_id,
             knowledge_fetcher=_search_routed_collections,
@@ -805,7 +807,7 @@ async def answer_with_knowledge(
         request_id=instrumentation.request_id if instrumentation else None,
         user_id=str(
             getattr(
-                current_user,
+                authenticated_user,
                 "id",
                 instrumentation.request_id if instrumentation else uuid.uuid4(),
             )

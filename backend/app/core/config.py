@@ -111,6 +111,7 @@ class Settings(BaseSettings):
     ctv_one_supervisor_max_tasks: int = 6
     ctv_one_supervisor_max_depth: int = 3
     ctv_one_supervisor_max_parallel_tasks: int = 3
+    ctv_one_supervisor_planner_timeout_seconds: float = 20.0
     ctv_one_supervisor_task_timeout_seconds: float = 60.0
     ctv_one_supervisor_total_timeout_seconds: float = 180.0
     ctv_one_supervisor_fallback_direct: bool = True

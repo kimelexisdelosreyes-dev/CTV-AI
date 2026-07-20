@@ -12,6 +12,7 @@ TEST_ENVIRONMENT = {
     "QDRANT_URL": "http://127.0.0.1:1",
     "CTV_ONE_MONDAY_SNAPSHOT_REFRESH_ENABLED": "false",
     "CTV_ONE_INFERENCE_QUEUE_ENABLED": "false",
+    "CTV_ONE_SUPERVISOR_ENABLED": "false",
 }
 
 for name, value in TEST_ENVIRONMENT.items():
