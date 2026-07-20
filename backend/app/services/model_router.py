@@ -11,6 +11,10 @@ from app.services.ollama_service import OllamaServiceError, ollama_service
 ModelComplexity = Literal["simple", "moderate", "complex"]
 
 
+def configured_default_model() -> str:
+    return settings.ctv_one_model_default or settings.ollama_model
+
+
 @dataclass(frozen=True)
 class ModelRoutingInput:
     question: str
@@ -107,7 +111,7 @@ class ModelRouter:
         return "simple"
 
     def _configured_default(self) -> str:
-        return settings.ctv_one_model_default or settings.ollama_model
+        return configured_default_model()
 
     def _configured_model(self, role: str) -> str | None:
         return {

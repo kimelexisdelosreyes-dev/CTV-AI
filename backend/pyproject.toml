@@ -1,12 +1,21 @@
 [project]
 name = "ctv-ai-core"
-version = "1.0.0"
+dynamic = ["version"]
 description = "Local-first AI platform for multimedia production"
 requires-python = ">=3.12"
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = {attr = "app.core.version.APP_VERSION"}
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 100

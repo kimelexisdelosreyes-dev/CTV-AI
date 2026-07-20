@@ -13,3 +13,24 @@ backups/*
 company_data/private/
 
 benchmarks/reports/
+
+# Test and coverage output
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.mypy_cache/
+*.tsbuildinfo
+
+# Local runtime data
+*.db
+*.sqlite
+*.sqlite3
+company_data/ingested/
+tmp/
+temp/
+
+# Local model artifacts
+models/
+*.gguf
+*.safetensors

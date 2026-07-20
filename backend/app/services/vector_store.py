@@ -14,7 +14,10 @@ class VectorStoreError(CompanyBrainServiceError):
 
 class VectorStore:
     def __init__(self) -> None:
-        self.client = AsyncQdrantClient(url=settings.qdrant_url)
+        self.client = AsyncQdrantClient(
+            url=settings.qdrant_url,
+            check_compatibility=False,
+        )
 
     async def ensure_collection(self, vector_size: int) -> None:
         if not await self.client.collection_exists(settings.knowledge_collection):

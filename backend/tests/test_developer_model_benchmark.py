@@ -7,6 +7,7 @@ from app.api.routes import developer
 from app.db.models.user import User, UserRole
 from app.db.session import get_db
 from app.main import app
+from app.services.model_router import configured_default_model
 from app.services.performance_event_store import performance_event_store
 
 
@@ -41,8 +42,11 @@ def clear_developer_overrides() -> None:
 
 
 def test_models_endpoint_lists_available_models(monkeypatch) -> None:
+    default_model = configured_default_model()
+    comparison_model = "comparison:test"
+
     async def list_models():
-        return {"qwen3:14b", "qwen3:4b"}
+        return {default_model, comparison_model}
 
     monkeypatch.setattr(developer.ollama_service, "list_models", list_models)
     enable_developer_overrides()
@@ -54,14 +58,16 @@ def test_models_endpoint_lists_available_models(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json() == {
-        "default_model": "qwen3:14b",
-        "available_models": ["qwen3:14b", "qwen3:4b"],
+        "default_model": default_model,
+        "available_models": sorted([default_model, comparison_model]),
     }
 
 
 def test_benchmark_rejects_default_model(monkeypatch) -> None:
+    default_model = configured_default_model()
+
     async def list_models():
-        return {"qwen3:14b", "qwen3:4b"}
+        return {default_model, "comparison:test"}
 
     monkeypatch.setattr(developer.ollama_service, "list_models", list_models)
     enable_developer_overrides()
@@ -69,7 +75,7 @@ def test_benchmark_rejects_default_model(monkeypatch) -> None:
     try:
         response = TestClient(app).post(
             "/api/v1/developer/models/benchmark",
-            json={"comparison_model": "qwen3:14b"},
+            json={"comparison_model": default_model},
         )
     finally:
         clear_developer_overrides()

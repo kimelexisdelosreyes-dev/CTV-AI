@@ -87,7 +87,7 @@ async def test_knowledge_and_operations_execute_concurrently(monkeypatch) -> Non
         return [source()]
 
     async def fetch_operations(*_, **__):
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.35)
         return operations()
 
     monkeypatch.setattr(
@@ -113,7 +113,7 @@ async def test_knowledge_and_operations_execute_concurrently(monkeypatch) -> Non
     )
     elapsed = time.perf_counter() - started
 
-    assert elapsed < 0.45
+    assert elapsed < 0.5
     assert result.parallel_execution_used is True
     assert result.knowledge == [source()]
     assert result.operations is not None
@@ -122,9 +122,9 @@ async def test_knowledge_and_operations_execute_concurrently(monkeypatch) -> Non
         "operations": "success",
     }
     assert instrumentation.metrics["retrieval_parallel_used"] is True
-    assert instrumentation.metrics["retrieval_total_duration_ms"] < 450
+    assert instrumentation.metrics["retrieval_total_duration_ms"] < 500
     assert instrumentation.metrics["knowledge_retrieval_duration_ms"] >= 190
-    assert instrumentation.metrics["operations_retrieval_duration_ms"] >= 290
+    assert instrumentation.metrics["operations_retrieval_duration_ms"] >= 320
     assert instrumentation.metrics["parallel_time_saved_estimate_ms"] > 100
 
 

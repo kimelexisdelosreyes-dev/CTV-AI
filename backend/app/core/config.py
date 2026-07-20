@@ -1,9 +1,13 @@
 from functools import lru_cache
+from typing import ClassVar
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.core.version import APP_VERSION
 
 class Settings(BaseSettings):
     app_name: str = "CTV-AI Core"
-    app_version: str = "1.4.2"
+    app_version: ClassVar[str] = APP_VERSION
     api_v1_prefix: str = "/api/v1"
 
     ollama_base_url: str = "http://127.0.0.1:11434"

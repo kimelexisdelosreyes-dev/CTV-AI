@@ -20,6 +20,7 @@ from app.schemas.developer import (
 )
 from app.services.embedding_service import EmbeddingServiceError
 from app.services.knowledge_service import answer_with_knowledge
+from app.services.model_router import configured_default_model
 from app.services.ollama_service import OllamaServiceError, ollama_service
 from app.services.performance_event_store import performance_event_store
 from app.services.performance_instrumentation import AskPerformanceInstrumentation
@@ -116,7 +117,7 @@ async def developer_models(
     require_developer_mode()
     models = sorted(await ollama_service.list_models())
     return DeveloperModelsPublic(
-        default_model=settings.ollama_model,
+        default_model=configured_default_model(),
         available_models=models,
     )
 
@@ -141,7 +142,7 @@ async def benchmark_models(
 
     available_models = await ollama_service.list_models()
     comparison_model = payload.comparison_model.strip()
-    default_model = settings.ollama_model
+    default_model = configured_default_model()
 
     if comparison_model == default_model:
         raise HTTPException(

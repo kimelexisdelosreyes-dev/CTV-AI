@@ -113,7 +113,11 @@ async def test_default_local_policy_uses_qwen_8b(
 
     decision = await ModelRouter().route(routing_input(**overrides))
 
-    assert decision.selected_model == "qwen3:8b"
+    expected_model = {
+        "operations": defaults.ctv_one_model_operations,
+        "balanced": defaults.ctv_one_model_balanced,
+    }[expected_role]
+    assert decision.selected_model == expected_model
     assert decision.model_role == expected_role
 
 
@@ -144,8 +148,13 @@ async def test_explicit_complex_phrases_select_reasoning(
         "ctv_one_model_reasoning",
         defaults.ctv_one_model_reasoning,
     )
-    monkeypatch.setattr(settings, "ctv_one_model_default", "qwen3:8b")
-    install_models(monkeypatch, {"qwen3:8b", "deepseek-r1:14b"})
+    monkeypatch.setattr(
+        settings, "ctv_one_model_default", defaults.ctv_one_model_default
+    )
+    install_models(
+        monkeypatch,
+        {defaults.ctv_one_model_default, defaults.ctv_one_model_reasoning},
+    )
 
     decision = await ModelRouter().route(
         routing_input(
@@ -155,8 +164,27 @@ async def test_explicit_complex_phrases_select_reasoning(
         )
     )
 
-    assert decision.selected_model == "deepseek-r1:14b"
+    assert decision.selected_model == defaults.ctv_one_model_reasoning
     assert decision.model_role == "reasoning"
+
+
+@pytest.mark.anyio
+async def test_prompt_length_alone_does_not_select_reasoning(monkeypatch) -> None:
+    configure_models(monkeypatch)
+    install_models(monkeypatch)
+
+    decision = await ModelRouter().route(
+        routing_input(
+            question="Provide the requested information",
+            intent="general",
+            include_knowledge=False,
+            final_prompt_chars=8_000,
+            estimated_prompt_tokens=2_000,
+        )
+    )
+
+    assert decision.selected_model == settings.ctv_one_model_default
+    assert decision.model_role == "fallback"
 
 
 @pytest.mark.anyio
@@ -230,6 +258,75 @@ async def test_router_selects_model_by_context_and_complexity(
     assert decision.selected_model == expected_model
     assert decision.model_role == expected_role
     assert decision.fallback_used is False
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("overrides", "setting_name", "expected_role"),
+    [
+        ({}, "ctv_one_model_knowledge", "knowledge"),
+        (
+            {
+                "question": "What tasks are due?",
+                "intent": "operations",
+                "include_knowledge": False,
+                "include_operations": True,
+            },
+            "ctv_one_model_operations",
+            "operations",
+        ),
+        (
+            {
+                "question": "What should I focus on?",
+                "intent": "employee",
+                "include_knowledge": False,
+                "include_employee": True,
+            },
+            "ctv_one_model_fast",
+            "fast",
+        ),
+        (
+            {
+                "question": "Combine tasks with policy",
+                "intent": "mixed",
+                "include_operations": True,
+            },
+            "ctv_one_model_balanced",
+            "balanced",
+        ),
+        (
+            {
+                "question": "Analyze the strategic risks",
+                "intent": "general",
+                "include_knowledge": False,
+            },
+            "ctv_one_model_reasoning",
+            "reasoning",
+        ),
+        (
+            {
+                "question": "Hello",
+                "intent": "general",
+                "include_knowledge": False,
+            },
+            "ctv_one_model_default",
+            "fallback",
+        ),
+    ],
+)
+async def test_each_router_role_uses_its_configured_setting(
+    monkeypatch,
+    overrides,
+    setting_name,
+    expected_role,
+) -> None:
+    configure_models(monkeypatch)
+    install_models(monkeypatch)
+
+    decision = await ModelRouter().route(routing_input(**overrides))
+
+    assert decision.selected_model == getattr(settings, setting_name)
+    assert decision.model_role == expected_role
 
 
 @pytest.mark.anyio
