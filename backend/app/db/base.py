@@ -17,5 +17,6 @@ from app.db.models.operations_snapshot import (  # noqa: F401
     OperationTask,
     OperationsSnapshot,
 )
+from app.db.models.semantic_cache import SemanticCacheEntry  # noqa: F401
 from app.db.models.user import User  # noqa: F401
 from app.db.session import Base

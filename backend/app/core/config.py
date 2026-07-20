@@ -72,6 +72,16 @@ class Settings(BaseSettings):
     performance_log_path: str = r"B:\CTV_AI\logs\performance.jsonl"
     performance_log_max_bytes: int = 5_000_000
     performance_log_backup_count: int = 5
+    ctv_one_semantic_cache_enabled: bool = True
+    ctv_one_semantic_cache_exact_enabled: bool = True
+    ctv_one_semantic_cache_similarity_enabled: bool = True
+    ctv_one_semantic_cache_similarity_threshold: float = 0.94
+    ctv_one_semantic_cache_default_ttl_seconds: int = 86400
+    ctv_one_semantic_cache_operations_ttl_seconds: int = 900
+    ctv_one_semantic_cache_max_answer_chars: int = 12000
+    ctv_one_semantic_cache_max_candidates: int = 5
+    ctv_one_semantic_cache_prompt_policy_version: str = "p2.5-v1"
+    ctv_one_semantic_cache_router_policy_version: str = "p2.4.1-v1"
 
     model_config = SettingsConfigDict(
         env_file=".env",

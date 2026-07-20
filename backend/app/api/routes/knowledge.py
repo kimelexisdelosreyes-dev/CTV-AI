@@ -45,6 +45,7 @@ from app.services.knowledge_service import (
     queue_document,
     retry_document,
     search_knowledge,
+    store_streamed_answer_in_cache,
 )
 from app.services import conversation_service
 from app.services.performance_event_store import performance_event_store
@@ -323,6 +324,9 @@ async def ask(
     log_ask_performance(instrumentation, "success")
     http_response.headers["X-Request-ID"] = instrumentation.request_id
     http_response.headers["X-Result-Type"] = (
+        "cached_answer"
+        if instrumentation.metrics.get("semantic_cache_hit")
+        else
         "no_knowledge_fallback"
         if not sources and not personalization.operational_context_applied
         else "generated_answer"
@@ -394,10 +398,21 @@ async def ask_stream(
                         "retrieval_total_duration_ms": instrumentation.metrics.get(
                             "retrieval_total_duration_ms", 0.0
                         ),
+                        "semantic_cache_hit": instrumentation.metrics.get(
+                            "semantic_cache_hit", False
+                        ),
+                        "semantic_cache_hit_type": instrumentation.metrics.get(
+                            "semantic_cache_hit_type", "none"
+                        ),
                     },
                 )
 
-                if prepared.fallback_answer is not None:
+                if prepared.cached_answer is not None:
+                    answer_parts.append(prepared.cached_answer)
+                    token_chunk_count += 1
+                    instrumentation.record_first_stream_token()
+                    yield sse_event("token", {"text": prepared.cached_answer})
+                elif prepared.fallback_answer is not None:
                     answer_parts.append(prepared.fallback_answer)
                     yield sse_event("token", {"text": prepared.fallback_answer})
                 else:
@@ -435,6 +450,11 @@ async def ask_stream(
                         safe_detail="Model inference returned an empty response.",
                     )
                 instrumentation.record_answer(answer)
+                await store_streamed_answer_in_cache(
+                    prepared,
+                    answer,
+                    instrumentation,
+                )
                 assistant_persisted = False
                 if request.conversation_id is not None:
                     await conversation_service.append_assistant_message_for_request(

@@ -33,6 +33,7 @@ from app.services.performance_instrumentation import (
     estimate_input_tokens,
     prompt_character_count,
 )
+from app.services.semantic_cache import SemanticCacheResult, semantic_cache
 from app.services.vector_store import vector_store
 
 
@@ -48,6 +49,8 @@ class PreparedKnowledgeAnswer:
     model_override: str | None
     model_routing: ModelRoutingDecision | None = None
     fallback_answer: str | None = None
+    cached_answer: str | None = None
+    cache_result: SemanticCacheResult | None = None
 
 
 def _cap_text(value: str, max_chars: int) -> tuple[str, bool]:
@@ -405,6 +408,59 @@ async def answer_with_knowledge(
             routed_collections,
         )
 
+    cache_result = SemanticCacheResult(skip_reason="cache_lookup_failed")
+    cache_started = instrumentation.clock() if instrumentation else None
+    try:
+        cache_lookup = await semantic_cache.build_lookup(
+            question=question,
+            route_intent=route.intent,
+            requirements=requirements,
+            current_user_id=current_user.id,
+            conversation_id=conversation_id,
+            assistant=assistant,
+            category=category,
+        )
+        cache_result = await semantic_cache.lookup(cache_lookup)
+    except Exception:
+        cache_result = SemanticCacheResult(skip_reason="cache_service_error")
+    if instrumentation:
+        instrumentation.record_metric("semantic_cache_enabled", settings.ctv_one_semantic_cache_enabled)
+        instrumentation.record_metric(
+            "semantic_cache_eligible",
+            bool(cache_result.lookup and cache_result.lookup.eligible),
+        )
+        instrumentation.record_metric("semantic_cache_skip_reason", cache_result.skip_reason)
+        instrumentation.record_metric("semantic_cache_hit", cache_result.hit)
+        instrumentation.record_metric("semantic_cache_hit_type", cache_result.hit_type)
+        instrumentation.record_metric("semantic_cache_similarity", cache_result.similarity_score)
+        instrumentation.record_metric(
+            "semantic_cache_lookup_duration_ms",
+            cache_result.lookup_duration_ms
+            or max((instrumentation.clock() - cache_started) * 1000, 0.0),
+        )
+        instrumentation.record_metric(
+            "semantic_cache_scope",
+            cache_result.lookup.scope_type if cache_result.lookup else None,
+        )
+        instrumentation.record_metric("ollama_skipped_due_to_cache", cache_result.hit)
+        instrumentation.record_metric("semantic_cache_entry_age_seconds", cache_result.age_seconds)
+    if cache_result.hit and cache_result.answer and cache_result.personalization:
+        cached_sources = list(cache_result.sources)
+        if instrumentation:
+            instrumentation.model_name = cache_result.selected_model
+            instrumentation.retrieved_chunk_count = len(cached_sources)
+            instrumentation.record_answer(cache_result.answer)
+        if prepare_for_stream:
+            return PreparedKnowledgeAnswer(
+                messages=[],
+                sources=cached_sources,
+                personalization=cache_result.personalization,
+                model_override=cache_result.selected_model,
+                cached_answer=cache_result.answer,
+                cache_result=cache_result,
+            )
+        return cache_result.answer, cached_sources, cache_result.personalization
+
     retrieval_timer = (
         instrumentation.measure("context_retrieval")
         if instrumentation
@@ -514,6 +570,7 @@ async def answer_with_knowledge(
                     personalization=personalization,
                     model_override=model_override,
                     fallback_answer=fallback_answer,
+                    cache_result=cache_result,
                 )
             return (
                 fallback_answer,
@@ -534,6 +591,7 @@ async def answer_with_knowledge(
                 personalization=personalization,
                 model_override=model_override,
                 fallback_answer=fallback_answer,
+                cache_result=cache_result,
             )
         return (
             fallback_answer,
@@ -680,6 +738,7 @@ async def answer_with_knowledge(
             personalization=personalization,
             model_override=selected_model,
             model_routing=routing_decision,
+            cache_result=cache_result,
         )
 
     ollama_timer = (
@@ -703,4 +762,54 @@ async def answer_with_knowledge(
     if instrumentation:
         instrumentation.record_answer(answer)
 
+    write_started = instrumentation.clock() if instrumentation else None
+    try:
+        stored = await semantic_cache.store(
+            result=cache_result,
+            answer=answer,
+            sources=sources,
+            personalization=personalization,
+            selected_model=selected_model,
+            model_role=routing_decision.model_role,
+            result_type="generated_answer",
+        )
+    except Exception:
+        stored = False
+    if instrumentation:
+        instrumentation.record_metric("semantic_cache_stored", stored)
+        instrumentation.record_metric(
+            "semantic_cache_write_duration_ms",
+            max((instrumentation.clock() - write_started) * 1000, 0.0),
+        )
+
     return answer, sources, personalization
+
+
+async def store_streamed_answer_in_cache(
+    prepared: PreparedKnowledgeAnswer,
+    answer: str,
+    instrumentation: AskPerformanceInstrumentation,
+) -> bool:
+    if prepared.cache_result is None or prepared.cached_answer is not None:
+        return False
+    started = instrumentation.clock()
+    try:
+        stored = await semantic_cache.store(
+            result=prepared.cache_result,
+            answer=answer,
+            sources=prepared.sources,
+            personalization=prepared.personalization,
+            selected_model=prepared.model_override,
+            model_role=(
+                prepared.model_routing.model_role if prepared.model_routing else None
+            ),
+            result_type="generated_answer",
+        )
+    except Exception:
+        stored = False
+    instrumentation.record_metric("semantic_cache_stored", stored)
+    instrumentation.record_metric(
+        "semantic_cache_write_duration_ms",
+        max((instrumentation.clock() - started) * 1000, 0.0),
+    )
+    return stored

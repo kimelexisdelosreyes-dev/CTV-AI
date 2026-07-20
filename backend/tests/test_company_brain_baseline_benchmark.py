@@ -45,6 +45,14 @@ def test_benchmark_report_generation_writes_json_csv_and_markdown(tmp_path) -> N
                 "safe_detail": None,
                 "backend_request_id": "request-1",
                 "result_type": "generated_answer",
+                "cache_pass": "exact_hit",
+                "cache_eligible": True,
+                "cache_hit": True,
+                "cache_hit_type": "exact",
+                "cache_similarity_score": None,
+                "cache_lookup_duration_ms": 12.5,
+                "cache_scope": "global_company",
+                "ollama_skipped": True,
                 "model_selected": "qwen3:8b",
                 "model_role": "operations",
                 "model_routing_complexity": "moderate",
@@ -82,6 +90,8 @@ def test_benchmark_report_generation_writes_json_csv_and_markdown(tmp_path) -> N
     assert "operations_priorities" in paths["csv"].read_text(encoding="utf-8")
     assert "result_type" in paths["csv"].read_text(encoding="utf-8")
     assert "model_selected" in paths["csv"].read_text(encoding="utf-8")
+    assert "cache_hit_type" in paths["csv"].read_text(encoding="utf-8")
+    assert "exact_hit" in paths["md"].read_text(encoding="utf-8")
     assert "qwen3:8b" in paths["md"].read_text(encoding="utf-8")
     assert "Successful requests: 1/2" in paths["md"].read_text(encoding="utf-8")
     table_lines = [

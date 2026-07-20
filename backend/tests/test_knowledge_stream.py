@@ -99,6 +99,44 @@ def test_stream_returns_controlled_error_event(monkeypatch) -> None:
     assert "safe question" not in response.text
 
 
+def test_stream_cache_hit_preserves_protocol_and_skips_ollama(monkeypatch) -> None:
+    async def fake_prepare(**kwargs):
+        instrumentation = kwargs["instrumentation"]
+        instrumentation.record_metric("semantic_cache_hit", True)
+        instrumentation.record_metric("semantic_cache_hit_type", "exact")
+        instrumentation.record_metric("ollama_skipped_due_to_cache", True)
+        return PreparedKnowledgeAnswer(
+            messages=[],
+            sources=[],
+            personalization=ContextMetadata(routed_intent="policy"),
+            model_override="qwen3:8b",
+            cached_answer="Cached visible answer",
+        )
+
+    async def forbidden_stream(*_args, **_kwargs):
+        raise AssertionError("Ollama must not be called for a cache hit")
+        yield
+
+    app.dependency_overrides[get_current_user] = fake_current_user
+    app.dependency_overrides[get_db] = fake_db
+    monkeypatch.setattr(knowledge_route, "answer_with_knowledge", fake_prepare)
+    monkeypatch.setattr(knowledge_route.ollama_service, "stream_chat", forbidden_stream)
+    try:
+        response = TestClient(app).post(
+            "/api/v1/knowledge/ask/stream",
+            json={"question": "What is the leave policy?"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.text.count("event: token") == 1
+    assert "Cached visible answer" in response.text
+    assert '"semantic_cache_hit":true' in response.text
+    assert '"semantic_cache_hit_type":"exact"' in response.text
+    assert "event: done" in response.text
+
+
 def test_stream_persists_one_user_and_completed_assistant(monkeypatch) -> None:
     conversation_id = uuid.uuid4()
     client_message_id = uuid.uuid4()
