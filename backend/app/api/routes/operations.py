@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from app.api.dependencies import get_current_user
-from app.db.models.user import User
+from app.db.models.user import User, UserRole
 from app.schemas.operations import (
     OperationsRefreshResponse,
     OperationsSnapshotResponse,
@@ -30,12 +30,17 @@ async def snapshot(
 
 
 @router.post("/refresh", response_model=OperationsRefreshResponse)
+@router.post("/snapshot/refresh", response_model=OperationsRefreshResponse)
 async def refresh(
     http_response: Response,
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
+    if current_user.role not in {UserRole.admin, UserRole.manager}:
+        raise HTTPException(status_code=403, detail="Admin or manager required.")
     try:
-        snapshot = await operations_snapshot_service.sync("manual")
+        snapshot = await operations_snapshot_service.sync(
+            "manual", triggered_by=current_user.email
+        )
         return OperationsRefreshResponse(
             status="success",
             message="Operations refresh completed.",
@@ -66,5 +71,6 @@ async def refresh(
 
 
 @router.get("/sync/status", response_model=OperationsSyncStatusResponse)
+@router.get("/snapshot/status", response_model=OperationsSyncStatusResponse)
 async def sync_status(_: User = Depends(get_current_user)):
     return await operations_snapshot_service.status()

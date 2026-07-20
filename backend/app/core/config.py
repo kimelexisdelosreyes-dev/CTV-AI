@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     operations_sync_interval_seconds: float = 300.0
     operations_snapshot_max_age_seconds: float = 300.0
     operations_sync_timeout_seconds: float = 60.0
+    ctv_one_operations_snapshot_fresh_seconds: float = 900.0
+    ctv_one_operations_snapshot_aging_seconds: float = 3600.0
+    ctv_one_operations_snapshot_stale_seconds: float = 21600.0
+    ctv_one_monday_snapshot_refresh_enabled: bool = True
+    ctv_one_monday_snapshot_refresh_interval_seconds: float = 900.0
+    ctv_one_monday_snapshot_refresh_on_startup: bool = False
+    ctv_one_monday_snapshot_retry_attempts: int = 3
+    ctv_one_monday_snapshot_retry_base_seconds: float = 0.5
 
     ctv_ai_api_key: str = "ctv-ai-local"
     database_url: str = "postgresql+asyncpg://ctvai:ctvai_change_me@127.0.0.1:5432/ctvai"

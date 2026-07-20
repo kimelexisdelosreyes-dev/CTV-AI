@@ -20,12 +20,18 @@ def user() -> User:
         email="operations@example.com",
         full_name="Operations User",
         password_hash="not-used",
-        role=UserRole.employee,
+        role=UserRole.manager,
     )
 
 
 async def current_user():
     return user()
+
+
+async def employee_user():
+    value = user()
+    value.role = UserRole.employee
+    return value
 
 
 def empty_snapshot() -> OperationsSnapshotResponse:
@@ -46,11 +52,20 @@ def test_operations_endpoints_require_authentication() -> None:
     assert client.get("/api/v1/operations/sync/status").status_code == 401
 
 
+def test_manual_refresh_requires_manager_or_admin() -> None:
+    app.dependency_overrides[get_current_user] = employee_user
+    try:
+        response = TestClient(app).post("/api/v1/operations/snapshot/refresh")
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 403
+
+
 def test_snapshot_refresh_and_status_return_safe_shapes(monkeypatch) -> None:
     async def snapshot():
         return empty_snapshot()
 
-    async def refresh(trigger):
+    async def refresh(trigger, **_kwargs):
         assert trigger == "manual"
         return empty_snapshot()
 
@@ -78,12 +93,14 @@ def test_snapshot_refresh_and_status_return_safe_shapes(monkeypatch) -> None:
         snapshot_response = client.get("/api/v1/operations/snapshot")
         refresh_response = client.post("/api/v1/operations/refresh")
         status_response = client.get("/api/v1/operations/sync/status")
+        snapshot_status_response = client.get("/api/v1/operations/snapshot/status")
     finally:
         app.dependency_overrides.clear()
 
     assert snapshot_response.status_code == 200
     assert refresh_response.status_code == 200
     assert status_response.status_code == 200
+    assert snapshot_status_response.status_code == 200
     combined = str(
         [snapshot_response.json(), refresh_response.json(), status_response.json()]
     ).lower()
@@ -92,7 +109,7 @@ def test_snapshot_refresh_and_status_return_safe_shapes(monkeypatch) -> None:
 
 
 def test_refresh_reports_overlapping_sync_as_running(monkeypatch) -> None:
-    async def overlapping(_trigger):
+    async def overlapping(_trigger, **_kwargs):
         raise OperationsSyncInProgressError()
 
     app.dependency_overrides[get_current_user] = current_user
@@ -127,7 +144,7 @@ def test_refresh_preserves_snapshot_when_empty_result_is_rejected(monkeypatch) -
         tasks=[ConnectorTask(external_id="task-1", title="Keep me")],
     )
 
-    async def suspicious_empty(_trigger):
+    async def suspicious_empty(_trigger, **_kwargs):
         raise OperationsSyncEmptyResultError(previous)
 
     app.dependency_overrides[get_current_user] = current_user

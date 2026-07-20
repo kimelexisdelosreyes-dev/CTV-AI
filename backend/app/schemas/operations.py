@@ -7,7 +7,9 @@ from pydantic import BaseModel, Field
 from app.connectors.models import ConnectorProject, ConnectorTask
 
 
-Freshness = Literal["fresh", "stale", "refreshing", "failed", "empty"]
+Freshness = Literal[
+    "fresh", "aging", "stale", "unavailable", "refreshing", "empty", "failed"
+]
 
 
 class OperationsSnapshotResponse(BaseModel):
@@ -16,8 +18,16 @@ class OperationsSnapshotResponse(BaseModel):
     status: str
     freshness: Freshness
     fetched_at: datetime | None
+    generated_at: datetime | None = None
+    activated_at: datetime | None = None
     age_seconds: float | None
     task_count: int
+    board_count: int = 0
+    content_hash_prefix: str | None = None
+    content_hash: str | None = Field(default=None, exclude=True)
+    content_changed: bool | None = None
+    semantic_cache_invalidated: bool = False
+    cache_invalidation_count: int = 0
     tasks: list[ConnectorTask] = Field(default_factory=list)
     projects: list[ConnectorProject] = Field(default_factory=list)
     safe_error: str | None = None
@@ -27,7 +37,7 @@ class OperationsSyncStatusResponse(BaseModel):
     state: Literal["idle", "running"]
     running: bool
     status: Literal[
-        "idle", "running", "success", "failed", "stale", "suspicious_empty"
+        "idle", "running", "success", "failed", "aging", "stale", "suspicious_empty"
     ]
     started_at: datetime | None
     last_success_at: datetime | None
@@ -38,6 +48,19 @@ class OperationsSyncStatusResponse(BaseModel):
     safe_error: str | None
     can_refresh: bool
     stale_running_recovered: bool = False
+    active_snapshot_id: UUID | None = None
+    generated_at: datetime | None = None
+    activated_at: datetime | None = None
+    task_count: int = 0
+    board_count: int = 0
+    content_hash_prefix: str | None = None
+    last_refresh_status: str | None = None
+    last_refresh_duration_ms: float | None = None
+    last_failure_category: str | None = None
+    refresh_currently_running: bool = False
+    semantic_cache_invalidated: bool = False
+    cache_invalidation_count: int = 0
+    content_changed: bool | None = None
 
 
 class OperationsRefreshResponse(BaseModel):

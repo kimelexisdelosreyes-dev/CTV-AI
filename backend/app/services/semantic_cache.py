@@ -120,13 +120,13 @@ class SemanticCacheService:
         async with AsyncSessionLocal() as db:
             if "operations" in context_types:
                 snapshot = await db.execute(
-                    select(OperationsSnapshot.id, OperationsSnapshot.fetched_at)
-                    .where(OperationsSnapshot.status == "success")
-                    .order_by(OperationsSnapshot.fetched_at.desc())
+                    select(OperationsSnapshot.content_hash)
+                    .where(OperationsSnapshot.status == "active")
+                    .order_by(OperationsSnapshot.activated_at.desc())
                     .limit(1)
                 )
                 row = snapshot.first()
-                operations_fingerprint = _digest(tuple(row) if row else "missing")
+                operations_fingerprint = row[0] if row and row[0] else None
             if "knowledge" in context_types:
                 revision = await db.execute(
                     select(

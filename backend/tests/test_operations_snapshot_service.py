@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -15,6 +16,19 @@ from app.services.operations_snapshot_service import (
     OperationsSyncInProgressError,
 )
 from app.services.service_errors import CompanyBrainServiceError
+
+
+@pytest.fixture(autouse=True)
+def avoid_live_database_lock(monkeypatch):
+    @asynccontextmanager
+    async def acquired(_service):
+        yield True, 0.0
+
+    monkeypatch.setattr(
+        OperationsSnapshotService,
+        "_database_refresh_lock",
+        acquired,
+    )
 
 
 def task(external_id: str, title: str) -> ConnectorTask:
@@ -154,7 +168,8 @@ async def test_overlapping_sync_is_rejected_before_fetch() -> None:
 
 def test_snapshot_freshness_and_empty_state(monkeypatch) -> None:
     service = OperationsSnapshotService()
-    monkeypatch.setattr(settings, "operations_snapshot_max_age_seconds", 300)
+    monkeypatch.setattr(settings, "ctv_one_operations_snapshot_fresh_seconds", 300)
+    monkeypatch.setattr(settings, "ctv_one_operations_snapshot_aging_seconds", 500)
     snapshot = SimpleNamespace(
         id=uuid.uuid4(),
         status="success",
@@ -169,7 +184,7 @@ def test_snapshot_freshness_and_empty_state(monkeypatch) -> None:
 
     assert response.freshness == "stale"
     assert response.age_seconds >= 600
-    assert service.response(None).freshness == "empty"
+    assert service.response(None).freshness == "unavailable"
 
 
 @pytest.mark.anyio

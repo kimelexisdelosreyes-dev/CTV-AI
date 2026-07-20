@@ -7,6 +7,7 @@ from app.services.semantic_cache import (
     _cosine,
     normalize_query,
 )
+from app.services import semantic_cache as cache_module
 
 
 def requirements(**overrides) -> ContextRequirements:
@@ -120,3 +121,30 @@ def test_changed_source_revision_changes_invalidation_and_exact_key(monkeypatch)
     first, second = asyncio.run(build_pair())
     assert first.invalidation_fingerprint != second.invalidation_fingerprint
     assert first.exact_key != second.exact_key
+
+
+def test_operations_fingerprint_uses_active_content_hash(monkeypatch) -> None:
+    class Result:
+        def first(self):
+            return ("stable-content-hash",)
+
+    class Session:
+        async def execute(self, statement):
+            rendered = str(statement)
+            assert "operations_snapshots.status" in rendered
+            assert "content_hash" in rendered
+            return Result()
+
+    class SessionContext:
+        async def __aenter__(self):
+            return Session()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(cache_module, "AsyncSessionLocal", SessionContext)
+    operations, knowledge = asyncio.run(
+        SemanticCacheService()._state_fingerprints(("operations",))
+    )
+    assert operations == "stable-content-hash"
+    assert knowledge is None

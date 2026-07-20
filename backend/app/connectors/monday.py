@@ -14,7 +14,22 @@ from app.connectors.monday_settings import MondaySettings
 
 
 class MondayApiError(ConnectorError):
-    pass
+    category = "monday_api_error"
+    retryable = False
+
+    def __init__(
+        self,
+        safe_detail: str = "Monday data could not be retrieved safely.",
+        *,
+        category: str | None = None,
+        retryable: bool | None = None,
+        retry_after_seconds: float | None = None,
+    ) -> None:
+        super().__init__(safe_detail)
+        self.safe_detail = safe_detail
+        self.category = category or self.category
+        self.retryable = self.retryable if retryable is None else retryable
+        self.retry_after_seconds = retry_after_seconds
 
 
 class MondayConnector(BaseConnector):
@@ -37,7 +52,8 @@ class MondayConnector(BaseConnector):
     async def _graphql(self, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
         if not self.config.configured:
             raise MondayApiError(
-                "Set MONDAY_ENABLED=true, MONDAY_API_TOKEN, and MONDAY_BOARD_IDS."
+                "Monday is not configured.",
+                category="monday_not_configured",
             )
         headers = {
             "Authorization": self.config.api_token,
@@ -51,23 +67,56 @@ class MondayConnector(BaseConnector):
                     headers=headers,
                     json={"query": query, "variables": variables or {}},
                 )
+        except httpx.TimeoutException as exc:
+            raise MondayApiError(
+                "Monday request timed out.",
+                category="monday_timeout",
+                retryable=True,
+            ) from exc
         except httpx.HTTPError as exc:
-            raise MondayApiError(f"Could not reach monday.com: {exc}") from exc
+            raise MondayApiError(
+                "Monday is temporarily unavailable.",
+                category="monday_network_error",
+                retryable=True,
+            ) from exc
 
         if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After")
+            try:
+                retry_after_seconds = float(retry_after) if retry_after else None
+            except ValueError:
+                retry_after_seconds = None
             raise MondayApiError(
-                f"monday.com rate limit reached. Retry-After: "
-                f"{response.headers.get('Retry-After', 'unknown')}."
+                "Monday rate limit reached.",
+                category="monday_rate_limited",
+                retryable=True,
+                retry_after_seconds=retry_after_seconds,
             )
-        response.raise_for_status()
-        payload = response.json()
+        if response.status_code in {401, 403}:
+            raise MondayApiError(
+                "Monday authentication failed.",
+                category="monday_authentication_failed",
+            )
+        if response.status_code >= 500:
+            raise MondayApiError(
+                "Monday is temporarily unavailable.",
+                category="monday_upstream_error",
+                retryable=True,
+            )
+        try:
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPStatusError, ValueError) as exc:
+            raise MondayApiError(
+                "Monday returned an invalid response.",
+                category="monday_invalid_response",
+            ) from exc
 
         if payload.get("errors"):
-            message = "; ".join(
-                str(item.get("message", "GraphQL error"))
-                for item in payload["errors"]
+            raise MondayApiError(
+                "Monday rejected the requested operation.",
+                category="monday_graphql_error",
             )
-            raise MondayApiError(message)
 
         return payload.get("data") or {}
 

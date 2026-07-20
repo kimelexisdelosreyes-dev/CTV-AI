@@ -26,7 +26,7 @@ async def lifespan(_: FastAPI):
         )
     sync_stop = asyncio.Event()
     sync_task = None
-    if settings.operations_sync_enabled:
+    if settings.ctv_one_monday_snapshot_refresh_enabled:
         sync_task = asyncio.create_task(operations_sync_loop(sync_stop))
     try:
         yield
