@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.api.dependencies import get_current_user
 from app.db.models.user import User, UserRole
 from app.services.inference_queue import inference_queue
+from app.supervisor.service import executive_supervisor
 
 
 router = APIRouter(prefix="/runtime", tags=["runtime"])
@@ -20,3 +21,15 @@ async def inference_status(
             detail="Administrator access required.",
         )
     return await inference_queue.status()
+
+
+@router.get("/supervisor/status")
+async def supervisor_status(
+    current_user: User = Depends(get_current_user),
+) -> dict[str, object]:
+    if current_user.role != UserRole.admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator access required.",
+        )
+    return await executive_supervisor.status()

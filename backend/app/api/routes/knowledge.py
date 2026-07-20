@@ -301,6 +301,7 @@ async def ask(
                 db=db,
                 instrumentation=instrumentation,
                 conversation_id=request.conversation_id,
+                supervisor_mode=request.supervisor_mode,
             )
 
             with instrumentation.measure("response_formatting"):
@@ -400,18 +401,62 @@ async def ask_stream(
                         ) from exc
                     user_message_saved = True
 
-                prepared = await answer_with_knowledge(
-                    question=request.question,
-                    top_k=request.top_k,
-                    category=selected,
-                    assistant=request.assistant,
-                    use_employee_context=request.use_employee_context,
-                    current_user=current_user,
-                    db=db,
-                    instrumentation=instrumentation,
-                    conversation_id=request.conversation_id,
-                    prepare_for_stream=True,
+                supervisor_events: asyncio.Queue[tuple[str, dict[str, object]]] = (
+                    asyncio.Queue()
                 )
+
+                async def supervisor_event(
+                    event_name: str,
+                    event_data: dict[str, object],
+                ) -> None:
+                    await supervisor_events.put((event_name, event_data))
+
+                prepare_task = asyncio.create_task(
+                    answer_with_knowledge(
+                        question=request.question,
+                        top_k=request.top_k,
+                        category=selected,
+                        assistant=request.assistant,
+                        use_employee_context=request.use_employee_context,
+                        current_user=current_user,
+                        db=db,
+                        instrumentation=instrumentation,
+                        conversation_id=request.conversation_id,
+                        prepare_for_stream=True,
+                        supervisor_mode=request.supervisor_mode,
+                        supervisor_event_callback=supervisor_event,
+                    )
+                )
+                event_task: asyncio.Task | None = None
+                try:
+                    while not prepare_task.done():
+                        if await http_request.is_disconnected():
+                            prepare_task.cancel()
+                            await asyncio.gather(prepare_task, return_exceptions=True)
+                            raise asyncio.CancelledError()
+                        event_task = asyncio.create_task(supervisor_events.get())
+                        completed, _ = await asyncio.wait(
+                            {prepare_task, event_task},
+                            timeout=0.1,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if event_task in completed:
+                            event_name, event_data = event_task.result()
+                            yield sse_event(event_name, event_data)
+                        else:
+                            event_task.cancel()
+                            await asyncio.gather(event_task, return_exceptions=True)
+                    prepared = await prepare_task
+                    while not supervisor_events.empty():
+                        event_name, event_data = supervisor_events.get_nowait()
+                        yield sse_event(event_name, event_data)
+                finally:
+                    if event_task is not None and not event_task.done():
+                        event_task.cancel()
+                        await asyncio.gather(event_task, return_exceptions=True)
+                    if not prepare_task.done():
+                        prepare_task.cancel()
+                        await asyncio.gather(prepare_task, return_exceptions=True)
 
                 instrumentation.record_stream_started()
                 selected_model = prepared.model_override or configured_default_model()
@@ -450,6 +495,13 @@ async def ask_stream(
                     yield sse_event("context_ready", context_ready_data)
                     answer_parts.append(prepared.fallback_answer)
                     yield sse_event("token", {"text": prepared.fallback_answer})
+                elif prepared.supervised_answer is not None:
+                    instrumentation.record_context_ready()
+                    yield sse_event("context_ready", context_ready_data)
+                    answer_parts.append(prepared.supervised_answer)
+                    token_chunk_count += 1
+                    instrumentation.record_first_stream_token()
+                    yield sse_event("token", {"text": prepared.supervised_answer})
                 else:
                     if isinstance(db, AsyncSession) and db.in_transaction():
                         await db.rollback()

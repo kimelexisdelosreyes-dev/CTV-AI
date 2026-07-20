@@ -17,8 +17,9 @@ DEFAULT_TIMEOUT_SECONDS = 420
 DEFAULT_OUTPUT_DIR = Path("benchmarks") / "reports"
 DEFAULT_PERFORMANCE_LOG_PATH = Path("logs") / "performance.jsonl"
 ENDPOINT_PATH = "/api/v1/knowledge/ask"
+STREAM_ENDPOINT_PATH = "/api/v1/knowledge/ask/stream"
 
-PROMPTS = [
+BASELINE_PROMPTS = [
     (
         "operations_priorities",
         "What are the highest operational priorities for the company today?",
@@ -61,6 +62,59 @@ PROMPTS = [
     ),
 ]
 
+SUPERVISOR_PROMPTS = [
+    ("supervisor_direct_knowledge", "What company policy applies to leave requests?"),
+    ("supervisor_direct_operations", "What tasks are overdue right now?"),
+    (
+        "supervisor_operations_plus_knowledge",
+        "Compare current overdue production tasks with our approved production policy.",
+    ),
+    (
+        "supervisor_employee_plus_operations",
+        "Review my responsibilities against current operations priorities.",
+    ),
+    (
+        "supervisor_operations_plus_recommendation",
+        "Review current operations priorities and recommend the safest next actions.",
+    ),
+    (
+        "supervisor_three_agent_executive_summary",
+        "Prepare an executive summary using current operations, approved policy, and recommendations.",
+    ),
+    (
+        "supervisor_planner_fallback",
+        "Prepare a bounded management brief from approved enterprise information.",
+    ),
+    (
+        "supervisor_optional_partial_failure",
+        "Summarize current operations and add any available supporting policy guidance.",
+    ),
+    (
+        "supervisor_streaming",
+        "Compare current priorities with approved guidance and provide a concise brief.",
+    ),
+    (
+        "supervisor_direct_cache_hit_under_load",
+        "What company policy applies to leave requests?",
+    ),
+]
+
+PROMPTS = BASELINE_PROMPTS + SUPERVISOR_PROMPTS
+SUPERVISOR_CASE_MODES = {
+    "supervisor_direct_knowledge": "direct",
+    "supervisor_direct_operations": "direct",
+    "supervisor_direct_cache_hit_under_load": "direct",
+    **{
+        label: "supervised"
+        for label, _ in SUPERVISOR_PROMPTS
+        if label not in {
+            "supervisor_direct_knowledge",
+            "supervisor_direct_operations",
+            "supervisor_direct_cache_hit_under_load",
+        }
+    },
+}
+
 PARAPHRASES = {
     "operations_priorities": "Which company operations need the most attention today?",
     "overdue_tasks": "What overdue work should be addressed first?",
@@ -72,6 +126,16 @@ PARAPHRASES = {
     "mixed_operations_plus_knowledge": "Relate today's operations priorities to the relevant approved guidance.",
     "employee_context_question": "Given my role and preferences, what deserves my attention next?",
     "repeat_operations_priorities": "Which company operations need the most attention today?",
+    "supervisor_direct_knowledge": "Which approved leave policy should I follow?",
+    "supervisor_direct_operations": "Which work items are currently overdue?",
+    "supervisor_operations_plus_knowledge": "Relate overdue production work to the approved production policy.",
+    "supervisor_employee_plus_operations": "How do my responsibilities align with today's operations priorities?",
+    "supervisor_operations_plus_recommendation": "Recommend next steps based on current operational priorities.",
+    "supervisor_three_agent_executive_summary": "Create a management summary from operations, approved policy, and recommendations.",
+    "supervisor_planner_fallback": "Create a safe management brief from available approved enterprise context.",
+    "supervisor_optional_partial_failure": "Summarize operations with any available policy support.",
+    "supervisor_streaming": "Briefly compare current priorities and approved guidance.",
+    "supervisor_direct_cache_hit_under_load": "Which approved leave policy should I follow?",
 }
 
 
@@ -140,6 +204,11 @@ def benchmark_url(api_root: str) -> str:
     return f"{api_root}{ENDPOINT_PATH}"
 
 
+def stream_benchmark_url(api_root: str) -> str:
+    ask_url = benchmark_url(api_root)
+    return ask_url.removesuffix(ENDPOINT_PATH) + STREAM_ENDPOINT_PATH
+
+
 def call_prompt(
     api_root: str,
     bearer_token: str,
@@ -147,16 +216,20 @@ def call_prompt(
     case_label: str,
     question: str,
     performance_log_path: Path = DEFAULT_PERFORMANCE_LOG_PATH,
+    *,
+    supervisor_mode: str = "auto",
+    streaming: bool = False,
 ) -> dict[str, Any]:
     payload = {
         "question": question,
         "top_k": 5,
         "assistant": "general",
         "use_employee_context": True,
+        "supervisor_mode": supervisor_mode,
     }
     body = json.dumps(payload).encode("utf-8")
     request = Request(
-        benchmark_url(api_root),
+        stream_benchmark_url(api_root) if streaming else benchmark_url(api_root),
         data=body,
         method="POST",
         headers={
@@ -170,10 +243,16 @@ def call_prompt(
     try:
         with urlopen(request, timeout=timeout_seconds) as response:
             response_body = response.read().decode("utf-8")
-            data = json.loads(response_body) if response_body else {}
+            data = (
+                {}
+                if streaming
+                else json.loads(response_body) if response_body else {}
+            )
             status_code = response.status
             headers = response.headers
-            ok = 200 <= status_code < 300
+            ok = 200 <= status_code < 300 and (
+                not streaming or "event: done" in response_body
+            )
             error = None
     except HTTPError as exc:
         status_code = exc.code
@@ -273,6 +352,8 @@ def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
             case_label,
             question,
             config.performance_log_path,
+            supervisor_mode=SUPERVISOR_CASE_MODES.get(case_label, "auto"),
+            streaming=case_label == "supervisor_streaming",
         )
         selected_model = result.get("model_selected")
         model_known = isinstance(selected_model, str) and bool(selected_model)
@@ -310,6 +391,8 @@ def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
         "api_root": config.api_root,
         "timeout_seconds": config.timeout_seconds,
         "prompt_count": len(PROMPTS),
+        "baseline_prompt_count": len(BASELINE_PROMPTS),
+        "supervisor_prompt_count": len(SUPERVISOR_PROMPTS),
         "request_count": len(cases),
         "cache_passes_enabled": config.cache_passes,
         "results": results,
@@ -425,6 +508,18 @@ def prompt_metrics_from_event(event: dict[str, Any] | None) -> dict[str, Any]:
         "cache_scope": metrics.get("semantic_cache_scope"),
         "ollama_skipped": metrics.get("ollama_skipped_due_to_cache"),
         "cache_write_duration_ms": metrics.get("semantic_cache_write_duration_ms"),
+        "supervisor_mode": metrics.get("supervisor_mode"),
+        "supervisor_planner_type": metrics.get("supervisor_planner_type"),
+        "supervisor_task_count": metrics.get("supervisor_plan_task_count"),
+        "supervisor_agents": metrics.get("supervisor_agents_selected", []),
+        "supervisor_planning_duration_ms": metrics.get("supervisor_planning_duration_ms"),
+        "supervisor_execution_duration_ms": metrics.get("supervisor_execution_duration_ms"),
+        "supervisor_composition_duration_ms": metrics.get("supervisor_composition_duration_ms"),
+        "supervisor_total_duration_ms": metrics.get("supervisor_total_duration_ms"),
+        "supervisor_parallelism_peak": metrics.get("supervisor_parallelism_peak"),
+        "supervisor_fallback_used": metrics.get("supervisor_fallback_used"),
+        "supervisor_partial_result": metrics.get("supervisor_partial_result"),
+        "inference_queue_wait_ms": metrics.get("inference_queue_wait_ms"),
     }
 
 
@@ -487,6 +582,18 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
             "cache_scope",
             "ollama_skipped",
             "cache_write_duration_ms",
+            "supervisor_mode",
+            "supervisor_planner_type",
+            "supervisor_task_count",
+            "supervisor_agents",
+            "supervisor_planning_duration_ms",
+            "supervisor_execution_duration_ms",
+            "supervisor_composition_duration_ms",
+            "supervisor_total_duration_ms",
+            "supervisor_parallelism_peak",
+            "supervisor_fallback_used",
+            "supervisor_partial_result",
+            "inference_queue_wait_ms",
             "model_selected",
             "model_role",
             "model_routing_reason",

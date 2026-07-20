@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -105,6 +105,17 @@ class Settings(BaseSettings):
     ctv_one_inference_per_user_queue_limit: int = 3
     ctv_one_inference_shutdown_grace_seconds: float = 30.0
     ctv_one_inference_priority_aging_seconds: float = 30.0
+    ctv_one_supervisor_enabled: bool = True
+    ctv_one_supervisor_default_mode: Literal["auto", "direct", "supervised"] = "auto"
+    ctv_one_supervisor_llm_planning_enabled: bool = True
+    ctv_one_supervisor_max_tasks: int = 6
+    ctv_one_supervisor_max_depth: int = 3
+    ctv_one_supervisor_max_parallel_tasks: int = 3
+    ctv_one_supervisor_task_timeout_seconds: float = 60.0
+    ctv_one_supervisor_total_timeout_seconds: float = 180.0
+    ctv_one_supervisor_fallback_direct: bool = True
+    ctv_one_supervisor_cache_enabled: bool = False
+    ctv_one_supervisor_stream_events_enabled: bool = True
 
     model_config = SettingsConfigDict(
         env_file=".env",

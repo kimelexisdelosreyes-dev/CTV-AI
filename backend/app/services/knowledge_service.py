@@ -40,6 +40,9 @@ from app.services.performance_instrumentation import (
 )
 from app.services.semantic_cache import SemanticCacheResult, semantic_cache
 from app.services.vector_store import vector_store
+from app.supervisor.execution_engine import SupervisorEventCallback
+from app.supervisor.schemas import RequestedSupervisorMode, SupervisorResult
+from app.supervisor.service import executive_supervisor
 
 
 class KnowledgeServiceError(RuntimeError):
@@ -56,6 +59,8 @@ class PreparedKnowledgeAnswer:
     fallback_answer: str | None = None
     cached_answer: str | None = None
     cache_result: SemanticCacheResult | None = None
+    supervised_answer: str | None = None
+    supervisor_result: SupervisorResult | None = None
 
 
 def _cap_text(value: str, max_chars: int) -> tuple[str, bool]:
@@ -381,6 +386,8 @@ async def answer_with_knowledge(
     conversation_id: uuid.UUID | None = None,
     prepare_for_stream: bool = False,
     inference_priority: InferencePriority | None = None,
+    supervisor_mode: RequestedSupervisorMode = "auto",
+    supervisor_event_callback: SupervisorEventCallback | None = None,
 ) -> tuple[str, list[KnowledgeSource], ContextMetadata] | PreparedKnowledgeAnswer:
     router_timer = (
         instrumentation.measure("intelligence_router")
@@ -452,6 +459,7 @@ async def answer_with_knowledge(
         instrumentation.record_metric("semantic_cache_entry_age_seconds", cache_result.age_seconds)
     if cache_result.hit and cache_result.answer and cache_result.personalization:
         inference_queue.record_cache_bypass(instrumentation)
+        executive_supervisor.record_cache_hit(instrumentation)
         cached_sources = list(cache_result.sources)
         if instrumentation:
             instrumentation.model_name = cache_result.selected_model
@@ -467,6 +475,48 @@ async def answer_with_knowledge(
                 cache_result=cache_result,
             )
         return cache_result.answer, cached_sources, cache_result.personalization
+
+    supervisor_outcome = await executive_supervisor.execute_if_needed(
+        question=question,
+        requested_mode=supervisor_mode,
+        request_id=(instrumentation.request_id if instrumentation else str(uuid.uuid4())),
+        conversation_id=str(conversation_id) if conversation_id else None,
+        streaming=prepare_for_stream,
+        route=route,
+        requirements=requirements,
+        current_user=current_user,
+        db=db,
+        top_k=top_k,
+        instrumentation=instrumentation,
+        knowledge_fetcher=_search_routed_collections,
+        event_callback=supervisor_event_callback,
+    )
+    if supervisor_outcome.result is not None:
+        supervisor_result = supervisor_outcome.result
+        supervised_sources = _sources_from_supervisor(supervisor_result)
+        personalization = ContextMetadata(
+            routed_intent=route.intent,
+            routing_confidence=route.confidence,
+            routed_collections=routed_collections,
+            intelligence_sources=route.sources,
+            operational_context_applied=any(
+                result.agent_id == "operations_agent" and result.status == "success"
+                for result in supervisor_result.task_results
+            ),
+        )
+        if instrumentation:
+            instrumentation.retrieved_chunk_count = len(supervised_sources)
+            instrumentation.record_answer(supervisor_result.final_answer)
+        if prepare_for_stream:
+            return PreparedKnowledgeAnswer(
+                messages=[],
+                sources=supervised_sources,
+                personalization=personalization,
+                model_override=None,
+                supervised_answer=supervisor_result.final_answer,
+                supervisor_result=supervisor_result,
+            )
+        return supervisor_result.final_answer, supervised_sources, personalization
 
     retrieval_timer = (
         instrumentation.measure("context_retrieval")
@@ -843,6 +893,33 @@ async def answer_with_knowledge(
         )
 
     return answer, sources, personalization
+
+
+def _sources_from_supervisor(result: SupervisorResult) -> list[KnowledgeSource]:
+    sources: list[KnowledgeSource] = []
+    seen: set[str] = set()
+    for task_result in result.task_results:
+        for evidence in task_result.evidence:
+            if evidence.source_type != "knowledge" or evidence.evidence_id in seen:
+                continue
+            seen.add(evidence.evidence_id)
+            metadata = evidence.metadata
+            sources.append(
+                KnowledgeSource(
+                    document_id=str(metadata.get("document_id") or evidence.evidence_id),
+                    filename=str(metadata.get("filename") or "Approved knowledge"),
+                    category=str(metadata.get("category") or "general"),
+                    chunk_index=int(metadata.get("chunk_index") or 0),
+                    page_number=(
+                        int(metadata["page_number"])
+                        if metadata.get("page_number") is not None
+                        else None
+                    ),
+                    text=evidence.content,
+                    score=float(metadata.get("score") or 0.0),
+                )
+            )
+    return sources
 
 
 async def store_streamed_answer_in_cache(
