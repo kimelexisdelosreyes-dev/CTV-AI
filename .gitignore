@@ -11,3 +11,5 @@ logs/
 backups/*
 !backups/.gitkeep
 company_data/private/
+
+benchmarks/reports/

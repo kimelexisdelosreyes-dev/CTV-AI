@@ -61,6 +61,19 @@ PROMPTS = [
     ),
 ]
 
+PARAPHRASES = {
+    "operations_priorities": "Which company operations need the most attention today?",
+    "overdue_tasks": "What overdue work should be addressed first?",
+    "company_policy": "Which approved leave policy applies when requesting time off?",
+    "equipment_manual": "According to the approved manuals, how should the equipment be set up?",
+    "production_sop": "What does the approved SOP require before a production shoot?",
+    "technical_troubleshooting": "What approved steps apply when production equipment has a technical problem?",
+    "brand_guidance": "Which approved brand rules apply to client-facing materials?",
+    "mixed_operations_plus_knowledge": "Relate today's operations priorities to the relevant approved guidance.",
+    "employee_context_question": "Given my role and preferences, what deserves my attention next?",
+    "repeat_operations_priorities": "Which company operations need the most attention today?",
+}
+
 
 @dataclass(frozen=True)
 class BenchmarkConfig:
@@ -69,6 +82,7 @@ class BenchmarkConfig:
     timeout_seconds: float
     output_dir: Path
     performance_log_path: Path
+    cache_passes: bool = False
 
 
 def config_from_env() -> BenchmarkConfig:
@@ -113,6 +127,8 @@ def config_from_env() -> BenchmarkConfig:
         timeout_seconds=timeout_seconds,
         output_dir=output_dir,
         performance_log_path=performance_log_path,
+        cache_passes=os.getenv("CTV_ONE_BENCHMARK_CACHE_PASSES", "").lower()
+        in {"1", "true", "yes", "on"},
     )
 
 
@@ -231,8 +247,25 @@ def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
     previous_model: str | None = None
     seen_models: set[str] = set()
 
-    for index, (case_label, question) in enumerate(PROMPTS, 1):
-        print(f"[{index}/{len(PROMPTS)}] {case_label}")
+    passes = [("cold_cache", PROMPTS)]
+    if config.cache_passes:
+        passes.extend(
+            [
+                ("exact_hit", PROMPTS),
+                (
+                    "semantic_hit",
+                    [(label, PARAPHRASES[label]) for label, _ in PROMPTS],
+                ),
+            ]
+        )
+    cases = [
+        (pass_name, label, question)
+        for pass_name, prompts in passes
+        for label, question in prompts
+    ]
+
+    for index, (pass_name, case_label, question) in enumerate(cases, 1):
+        print(f"[{index}/{len(cases)}] {pass_name}: {case_label}")
         result = call_prompt(
             config.api_root,
             config.bearer_token,
@@ -247,6 +280,7 @@ def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
         result.update(
             {
                 "case_order": index,
+                "cache_pass": pass_name,
                 "previous_model": previous_model,
                 "same_model_as_previous_case": (
                     selected_model == previous_model
@@ -276,6 +310,8 @@ def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
         "api_root": config.api_root,
         "timeout_seconds": config.timeout_seconds,
         "prompt_count": len(PROMPTS),
+        "request_count": len(cases),
+        "cache_passes_enabled": config.cache_passes,
         "results": results,
     }
 
@@ -381,6 +417,14 @@ def prompt_metrics_from_event(event: dict[str, Any] | None) -> dict[str, Any]:
         "prompt_budget_applied": bool(metrics.get("prompt_budget_applied")),
         "prompt_components_omitted": metrics.get("prompt_components_omitted", []),
         "prompt_components_truncated": metrics.get("prompt_components_truncated", []),
+        "cache_eligible": metrics.get("semantic_cache_eligible"),
+        "cache_hit": metrics.get("semantic_cache_hit"),
+        "cache_hit_type": metrics.get("semantic_cache_hit_type"),
+        "cache_similarity_score": metrics.get("semantic_cache_similarity"),
+        "cache_lookup_duration_ms": metrics.get("semantic_cache_lookup_duration_ms"),
+        "cache_scope": metrics.get("semantic_cache_scope"),
+        "ollama_skipped": metrics.get("ollama_skipped_due_to_cache"),
+        "cache_write_duration_ms": metrics.get("semantic_cache_write_duration_ms"),
     }
 
 
@@ -413,6 +457,7 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
         fieldnames = [
             "case_label",
             "case_order",
+            "cache_pass",
             "success",
             "status_code",
             "duration_seconds",
@@ -434,6 +479,14 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
             "retrieval_total_duration_ms",
             "prompt_assembly_duration_ms",
             "inference_duration_ms",
+            "cache_eligible",
+            "cache_hit",
+            "cache_hit_type",
+            "cache_similarity_score",
+            "cache_lookup_duration_ms",
+            "cache_scope",
+            "ollama_skipped",
+            "cache_write_duration_ms",
             "model_selected",
             "model_role",
             "model_routing_reason",
@@ -477,19 +530,19 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
         f"- Timeout seconds: {report['timeout_seconds']}",
         f"- Successful requests: {successful}/{len(results)}",
         "",
-        "| # | Case | Result | Context | Prompt chars | Tokens | Model | Previous | "
+        "| # | Pass | Case | Result | Cache | Hit type | Lookup ms | Ollama skipped | Context | Prompt chars | Tokens | Model | Previous | "
         "Same model | First for model | Role | Complexity | Fallback | Budget | "
         "Parallel | Retrieval ms | Ops source | Snapshot age | Freshness | "
         "Saved est. ms | Degraded | Success | Status | "
         "Seconds | Sources | Ops tasks | Error |",
-        "| ---: | --- | --- | --- | ---: | ---: | --- | --- | --- | --- | "
+        "| ---: | --- | --- | --- | --- | --- | ---: | --- | --- | ---: | ---: | --- | --- | --- | --- | "
         "--- | --- | --- | --- | --- | ---: | --- | ---: | --- | ---: | --- | "
         "--- | --- | "
         "---: | ---: | ---: | --- |",
     ]
     for result in results:
         lines.append(
-            "| {case_order} | {case_label} | {result_type} | {context} | {prompt_chars} | "
+            "| {case_order} | {cache_pass} | {case_label} | {result_type} | {cache_hit} | {hit_type} | {lookup_ms} | {ollama_skipped} | {context} | {prompt_chars} | "
             "{tokens} | {model} | {previous_model} | {same_model} | {first_model} | "
             "{role} | {complexity} | {fallback} | {budget} | {parallel} | "
             "{retrieval_ms} | {ops_source} | {snapshot_age} | {freshness} | "
@@ -498,6 +551,11 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
             "{error} |".format(
                 case_label=result.get("case_label"),
                 case_order=result.get("case_order") or "",
+                cache_pass=result.get("cache_pass") or "",
+                cache_hit=result.get("cache_hit"),
+                hit_type=result.get("cache_hit_type") or "",
+                lookup_ms=result.get("cache_lookup_duration_ms") or "",
+                ollama_skipped=result.get("ollama_skipped"),
                 result_type=result.get("result_type") or "",
                 context=",".join(result.get("selected_context_types") or []),
                 prompt_chars=result.get("final_prompt_chars") or "",
