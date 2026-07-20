@@ -1,19 +1,30 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from time import perf_counter
 
 from app.core.config import settings
+from app.agents.context import BudgetExceeded
+from app.agents.errors import AgentErrorCategory, AgentRuntimeError
+from app.agents.metrics import agent_runtime_metrics
+from app.agents.models import AgentLifecycleState, AgentResourceUsage
 from app.supervisor.agent_registry import AgentRegistry
 from app.supervisor.planner import validate_plan
 from app.supervisor.schemas import AgentResult, AgentTask, ExecutionPlan
 
 
 SupervisorEventCallback = Callable[[str, dict[str, object]], Awaitable[None]]
+logger = logging.getLogger(__name__)
 
 
 class ExecutionEngine:
+    def __init__(self, runtime_manager=None) -> None:
+        self.runtime_manager = runtime_manager
+
     async def execute(
         self,
         plan: ExecutionPlan,
@@ -43,10 +54,55 @@ class ExecutionEngine:
                     status="skipped",
                     error_category="required_dependency_failed",
                 )
+            selected_agent_id = task.agent_id
+            resolution = None
+            if self.runtime_manager and self.runtime_manager.initialized_at is not None:
+                resolution = self.runtime_manager.resolve_capability(
+                    task.capability,
+                    permissions=permissions,
+                    department=getattr(context, "department", None),
+                    role=getattr(context, "role", None),
+                    preferred_agent_id=task.agent_id,
+                )
+                if not resolution.selected_agent_id:
+                    return AgentResult(
+                        task_id=task.task_id,
+                        agent_id=task.agent_id,
+                        status="failed",
+                        capability=task.capability,
+                        agent_version=task.agent_version,
+                        error_category=AgentErrorCategory.UNAVAILABLE.value,
+                    )
+                selected_agent_id = resolution.selected_agent_id
+                definition = self.runtime_manager.registry.get(selected_agent_id).definition
+                if event_callback:
+                    await event_callback(
+                        "agent_resolved",
+                        {
+                            "task_id": task.task_id,
+                            "capability": task.capability,
+                            "agent_id": selected_agent_id,
+                            "agent_version": definition.version,
+                        },
+                    )
+                    if self.runtime_manager.state_for(selected_agent_id) == AgentLifecycleState.DEGRADED:
+                        await event_callback(
+                            "agent_degraded",
+                            {
+                                "task_id": task.task_id,
+                                "agent_id": selected_agent_id,
+                                "safe_reason_category": "agent_degraded",
+                            },
+                        )
             dependencies = _validated_dependency_results(task, results)
             runtime_task = task.model_copy(
-                update={"inputs": {**task.inputs, "dependency_results": dependencies}}
+                update={
+                    "agent_id": selected_agent_id,
+                    "inputs": {**task.inputs, "dependency_results": dependencies},
+                }
             )
+            budget = task.budget or getattr(context, "budget", None)
+            task_context = replace(context, task_id=task.task_id, budget=budget) if budget else context
             if event_callback:
                 if task.agent_id == "response_composer_agent":
                     await event_callback("composition_started", {})
@@ -57,34 +113,113 @@ class ExecutionEngine:
             running += 1
             peak = max(peak, running)
             task_started = perf_counter()
+            execution_started = False
             try:
-                async with asyncio.timeout(task.timeout_seconds):
-                    result = await registry.get(task.agent_id).execute(runtime_task, context)
+                if self.runtime_manager and self.runtime_manager.initialized_at is not None:
+                    await self.runtime_manager.begin_execution(selected_agent_id)
+                    execution_started = True
+                timeout_seconds = min(task.timeout_seconds, budget.timeout_seconds) if budget else task.timeout_seconds
+                async with asyncio.timeout(timeout_seconds):
+                    result = await registry.get(selected_agent_id).execute(runtime_task, task_context)
                 result = AgentResult.model_validate(result)
-                if result.task_id != task.task_id or result.agent_id != task.agent_id:
+                if result.task_id != task.task_id or result.agent_id != selected_agent_id:
                     raise ValueError("Agent returned a mismatched result contract.")
                 _validate_output_contract(task.output_contract, result.structured_output)
-                result.evidence = _validated_evidence(result.evidence)
+                result.evidence = _validated_evidence(
+                    result.evidence,
+                    max_items=budget.max_evidence_items if budget else 12,
+                )
+                usage = _resource_usage(runtime_task, result)
+                if budget:
+                    _enforce_budget(budget, usage)
+                    result.structured_output = _bounded_output(
+                        result.structured_output, budget.max_output_chars
+                    )
+                result.resource_usage = usage
+                result.agent_version = registry.get(selected_agent_id).definition.version
+                result.capability = task.capability
+                agent_runtime_metrics.increment(
+                    "agent_execution_success_count",
+                    agent_id=selected_agent_id,
+                    capability=task.capability,
+                )
             except TimeoutError:
                 result = AgentResult(
                     task_id=task.task_id,
-                    agent_id=task.agent_id,
+                    agent_id=selected_agent_id,
                     status="timed_out",
                     duration_ms=round((perf_counter() - task_started) * 1000, 3),
-                    error_category="supervisor_task_timeout",
+                    capability=task.capability,
+                    agent_version=task.agent_version,
+                    error_category=(
+                        AgentErrorCategory.EXECUTION_TIMEOUT.value
+                        if self.runtime_manager
+                        else "supervisor_task_timeout"
+                    ),
                 )
+                agent_runtime_metrics.increment("agent_execution_timeout_count", agent_id=selected_agent_id, capability=task.capability)
             except asyncio.CancelledError:
+                agent_runtime_metrics.increment("agent_execution_cancelled_count", agent_id=selected_agent_id, capability=task.capability)
                 raise
-            except Exception:
+            except BudgetExceeded as exc:
                 result = AgentResult(
                     task_id=task.task_id,
-                    agent_id=task.agent_id,
+                    agent_id=selected_agent_id,
                     status="failed",
                     duration_ms=round((perf_counter() - task_started) * 1000, 3),
-                    error_category="supervisor_agent_failed",
+                    capability=task.capability,
+                    agent_version=task.agent_version,
+                    error_category=AgentErrorCategory.BUDGET_EXCEEDED.value,
+                )
+                agent_runtime_metrics.increment("agent_budget_exceeded_count", agent_id=selected_agent_id, capability=task.capability)
+                if event_callback:
+                    await event_callback(
+                        "budget_warning",
+                        {
+                            "task_id": task.task_id,
+                            "agent_id": selected_agent_id,
+                            "budget_category": exc.budget_category,
+                        },
+                    )
+            except AgentRuntimeError as exc:
+                result = AgentResult(
+                    task_id=task.task_id,
+                    agent_id=selected_agent_id,
+                    status="failed",
+                    duration_ms=round((perf_counter() - task_started) * 1000, 3),
+                    capability=task.capability,
+                    agent_version=task.agent_version,
+                    error_category=exc.category.value,
+                )
+            except Exception:
+                logger.exception(
+                    "agent.execution_failed agent_id=%s capability=%s",
+                    selected_agent_id,
+                    task.capability,
+                )
+                result = AgentResult(
+                    task_id=task.task_id,
+                    agent_id=selected_agent_id,
+                    status="failed",
+                    duration_ms=round((perf_counter() - task_started) * 1000, 3),
+                    capability=task.capability,
+                    agent_version=task.agent_version,
+                    error_category=(
+                        AgentErrorCategory.INTERNAL_ERROR.value
+                        if self.runtime_manager
+                        else "supervisor_agent_failed"
+                    ),
                 )
             finally:
+                if execution_started:
+                    self.runtime_manager.end_execution(selected_agent_id)
                 running -= 1
+            agent_runtime_metrics.increment("agent_execution_count", agent_id=selected_agent_id, capability=task.capability)
+            agent_runtime_metrics.duration(
+                "agent_execution_duration_ms",
+                round((perf_counter() - task_started) * 1000, 3),
+                agent_id=selected_agent_id,
+            )
             if event_callback:
                 await event_callback(
                     "agent_completed",
@@ -141,12 +276,12 @@ class ExecutionEngine:
         )
 
 
-def _validated_evidence(items):
+def _validated_evidence(items, *, max_items: int = 12):
     unique = []
     seen: set[str] = set()
     total_chars = 0
     for item in items:
-        if item.evidence_id in seen or len(unique) >= 12:
+        if item.evidence_id in seen or len(unique) >= max_items:
             continue
         remaining = 12000 - total_chars
         if remaining <= 0:
@@ -204,3 +339,44 @@ def _validate_output_contract(contract: str, output: dict[str, object]) -> None:
     for field, expected_type in required.get(contract, {}).items():
         if not isinstance(output.get(field), expected_type):
             raise ValueError("Agent returned a malformed output contract.")
+
+
+def _resource_usage(task: AgentTask, result: AgentResult) -> AgentResourceUsage:
+    inference_capabilities = {
+        "compare", "synthesize", "recommend", "risk_analysis", "tradeoff_analysis",
+        "executive_summary", "final_answer", "structured_brief",
+    }
+    retrieval_capabilities = {
+        "knowledge_search", "policy_lookup", "document_summary", "evidence_retrieval",
+        "operations_status", "overdue_tasks", "priorities", "workload_summary", "project_status",
+        "employee_context", "responsibility_lookup", "role_context", "department_context",
+    }
+    return AgentResourceUsage(
+        inference_calls=int(task.capability in inference_capabilities),
+        retrieval_calls=int(task.capability in retrieval_capabilities),
+        evidence_items=len(result.evidence),
+        input_chars=len(json.dumps(task.inputs, ensure_ascii=True)),
+        output_chars=len(json.dumps(result.structured_output, ensure_ascii=True)),
+    )
+
+
+def _enforce_budget(budget, usage: AgentResourceUsage) -> None:
+    checks = {
+        "inference_calls": budget.max_inference_calls,
+        "retrieval_calls": budget.max_retrieval_calls,
+        "evidence_items": budget.max_evidence_items,
+        "input_chars": budget.max_input_chars,
+        "output_chars": budget.max_output_chars,
+        "prompt_tokens_estimate": budget.max_prompt_tokens_estimate,
+    }
+    for field, maximum in checks.items():
+        if getattr(usage, field) > maximum:
+            raise BudgetExceeded(field)
+    if usage.queue_wait_ms > budget.max_queue_wait_seconds * 1000:
+        raise BudgetExceeded("queue_wait")
+
+
+def _bounded_output(output: dict[str, object], maximum: int) -> dict[str, object]:
+    if len(json.dumps(output, ensure_ascii=True)) <= maximum:
+        return output
+    raise BudgetExceeded("output_chars")

@@ -6,6 +6,8 @@ import re
 from uuid import uuid4
 
 from app.core.config import settings
+from app.agents.errors import AgentErrorCategory, AgentRuntimeError
+from app.agents.models import AgentExecutionBudget
 from app.services.inference_queue import inference_queue
 from app.services.ollama_service import ollama_service
 from app.supervisor.agent_registry import AgentRegistry, AgentRegistryError
@@ -186,6 +188,74 @@ def validate_plan(
     if plan_depth(plan) > settings.ctv_one_supervisor_max_depth:
         raise SupervisorPlanError("Plan exceeds the configured dependency depth.")
     return plan
+
+
+def resolve_plan_capabilities(
+    plan: ExecutionPlan,
+    runtime_manager,
+    permissions: set[str],
+    *,
+    department: str | None = None,
+    role: str | None = None,
+) -> ExecutionPlan:
+    """Resolve every task deterministically without invoking a model."""
+    if runtime_manager.initialized_at is None:
+        return plan
+    resolved_tasks: list[AgentTask] = []
+    excluded_optional: set[str] = set()
+    system_maximum = AgentExecutionBudget(
+        timeout_seconds=settings.ctv_one_supervisor_task_timeout_seconds,
+        max_inference_calls=settings.ctv_one_agent_default_max_inference_calls,
+        max_retrieval_calls=settings.ctv_one_agent_default_max_retrieval_calls,
+        max_evidence_items=settings.ctv_one_agent_default_max_evidence_items,
+        max_output_chars=settings.ctv_one_agent_default_max_output_chars,
+        max_queue_wait_seconds=settings.ctv_one_agent_default_max_queue_wait_seconds,
+    )
+    for task in plan.tasks:
+        resolution = runtime_manager.resolve_capability(
+            task.capability,
+            permissions=permissions,
+            department=department,
+            role=role,
+            preferred_agent_id=task.agent_id,
+        )
+        if not resolution.selected_agent_id:
+            if task.optional:
+                excluded_optional.add(task.task_id)
+                continue
+            raise AgentRuntimeError(AgentErrorCategory.UNAVAILABLE)
+        definition = runtime_manager.registry.get(resolution.selected_agent_id).definition
+        requested_budget = task.budget or definition.default_budget.model_copy(
+            update={"timeout_seconds": min(task.timeout_seconds, definition.max_timeout_seconds)}
+        )
+        resolved_tasks.append(
+            task.model_copy(
+                update={
+                    "agent_id": resolution.selected_agent_id,
+                    "agent_version": definition.version,
+                    "contract_version": definition.contract_version,
+                    "capability_version": "1.0",
+                    "budget": requested_budget.bounded_by(system_maximum),
+                }
+            )
+        )
+    if excluded_optional:
+        resolved_tasks = [
+            task.model_copy(
+                update={
+                    "dependency_ids": [
+                        item for item in task.dependency_ids if item not in excluded_optional
+                    ]
+                }
+            )
+            for task in resolved_tasks
+        ]
+    return plan.model_copy(
+        update={
+            "tasks": resolved_tasks,
+            "required_agents": list(dict.fromkeys(task.agent_id for task in resolved_tasks)),
+        }
+    )
 
 
 async def llm_plan(

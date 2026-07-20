@@ -8,6 +8,14 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.capabilities import CapabilityCatalog
+from app.agents.models import (
+    AgentExecutionBudget,
+    AgentHealth,
+    AgentReadiness,
+    DependencyIdentifier,
+)
+from app.agents.plugins import AgentPlugin
 from app.core.config import settings
 from app.services.context_engine import context_engine
 from app.services.inference_queue import inference_queue
@@ -24,6 +32,8 @@ from app.supervisor.schemas import (
 
 @dataclass
 class AgentExecutionContext:
+    """Chapter 1 constructor retained for direct agent unit compatibility."""
+
     user: Any
     db: Any
     question: str
@@ -32,6 +42,33 @@ class AgentExecutionContext:
     requirements: Any
     instrumentation: Any
     knowledge_fetcher: Any
+
+
+class LifecycleAgent:
+    """Safe default lifecycle hooks for stateless built-in agents."""
+
+    _initialized = False
+
+    async def initialize(self, runtime_context) -> None:
+        self._initialized = True
+
+    async def health_check(self) -> AgentHealth:
+        return AgentHealth(status="healthy", safe_message="Built-in agent is available.")
+
+    async def readiness_check(self) -> AgentReadiness:
+        return AgentReadiness(
+            ready=self._initialized,
+            reason_category=None if self._initialized else "agent_not_initialized",
+            capability_availability={
+                capability: self._initialized for capability in self.definition.capabilities
+            },
+        )
+
+    async def drain(self) -> None:
+        return None
+
+    async def shutdown(self) -> None:
+        self._initialized = False
 
 
 def _result(
@@ -85,7 +122,7 @@ async def invoke_agent_model(
         await lease.release(cancelled=cancelled)
 
 
-class KnowledgeAgent:
+class KnowledgeAgent(LifecycleAgent):
     definition = AgentDefinition(
         agent_id="knowledge_agent",
         name="Knowledge Agent",
@@ -100,6 +137,9 @@ class KnowledgeAgent:
         input_schema="KnowledgeAgentInputV1",
         output_schema="KnowledgeEvidenceV1",
         estimated_cost_class="light",
+        version="2.0.0",
+        required_dependencies=frozenset({DependencyIdentifier.KNOWLEDGE_SERVICE}),
+        default_budget=AgentExecutionBudget(max_inference_calls=0, max_retrieval_calls=1),
     )
 
     async def execute(self, task: AgentTask, context: AgentExecutionContext) -> AgentResult:
@@ -136,7 +176,7 @@ class KnowledgeAgent:
         )
 
 
-class OperationsAgent:
+class OperationsAgent(LifecycleAgent):
     definition = AgentDefinition(
         agent_id="operations_agent",
         name="Operations Agent",
@@ -155,6 +195,9 @@ class OperationsAgent:
         input_schema="OperationsAgentInputV1",
         output_schema="OperationsSnapshotEvidenceV1",
         estimated_cost_class="light",
+        version="2.0.0",
+        required_dependencies=frozenset({DependencyIdentifier.OPERATIONS_SNAPSHOT_SERVICE}),
+        default_budget=AgentExecutionBudget(max_inference_calls=0, max_retrieval_calls=1),
     )
 
     async def execute(self, task: AgentTask, context: AgentExecutionContext) -> AgentResult:
@@ -192,7 +235,7 @@ class OperationsAgent:
         )
 
 
-class EmployeeAgent:
+class EmployeeAgent(LifecycleAgent):
     definition = AgentDefinition(
         agent_id="employee_agent",
         name="Employee Agent",
@@ -205,6 +248,11 @@ class EmployeeAgent:
         input_schema="EmployeeSelfContextInputV1",
         output_schema="EmployeeSelfContextV1",
         estimated_cost_class="light",
+        version="2.0.0",
+        required_dependencies=frozenset(
+            {DependencyIdentifier.EMPLOYEE_INTELLIGENCE_SERVICE, DependencyIdentifier.DATABASE_ADAPTER}
+        ),
+        default_budget=AgentExecutionBudget(max_inference_calls=0, max_retrieval_calls=1),
     )
 
     async def execute(self, task: AgentTask, context: AgentExecutionContext) -> AgentResult:
@@ -242,7 +290,7 @@ def _dependency_payload(task: AgentTask) -> list[dict[str, Any]]:
     return values if isinstance(values, list) else []
 
 
-class ReasoningAgent:
+class ReasoningAgent(LifecycleAgent):
     definition = AgentDefinition(
         agent_id="reasoning_agent",
         name="Reasoning Agent",
@@ -256,6 +304,13 @@ class ReasoningAgent:
         output_schema="ReasoningSummaryV1",
         estimated_cost_class="reasoning",
         supports_parallel_execution=False,
+        version="2.0.0",
+        required_dependencies=frozenset(
+            {DependencyIdentifier.INFERENCE_QUEUE, DependencyIdentifier.OLLAMA_CLIENT}
+        ),
+        default_budget=AgentExecutionBudget(
+            max_inference_calls=1, max_retrieval_calls=0, cost_class="reasoning"
+        ),
     )
 
     async def execute(self, task: AgentTask, context: AgentExecutionContext) -> AgentResult:
@@ -279,7 +334,7 @@ class ReasoningAgent:
         return _result(task, started, output={"analysis": answer[:6000]})
 
 
-class ResponseComposerAgent:
+class ResponseComposerAgent(LifecycleAgent):
     definition = AgentDefinition(
         agent_id="response_composer_agent",
         name="Response Composer Agent",
@@ -291,6 +346,14 @@ class ResponseComposerAgent:
         output_schema="CompanyBrainAnswerV1",
         estimated_cost_class="standard",
         supports_parallel_execution=False,
+        version="2.0.0",
+        required=True,
+        required_dependencies=frozenset(
+            {DependencyIdentifier.INFERENCE_QUEUE, DependencyIdentifier.OLLAMA_CLIENT}
+        ),
+        default_budget=AgentExecutionBudget(
+            max_inference_calls=1, max_retrieval_calls=0, allow_partial=False
+        ),
     )
 
     async def execute(self, task: AgentTask, context: AgentExecutionContext) -> AgentResult:
@@ -328,12 +391,23 @@ class ResponseComposerAgent:
 
 def build_agent_registry() -> AgentRegistry:
     registry = AgentRegistry()
-    for agent in (
-        KnowledgeAgent(),
-        OperationsAgent(),
-        EmployeeAgent(),
-        ReasoningAgent(),
-        ResponseComposerAgent(),
-    ):
-        registry.register(agent)
+    BuiltinCoreAgentPlugin().register(registry, registry.catalog)
     return registry
+
+
+class BuiltinCoreAgentPlugin:
+    plugin = AgentPlugin(
+        plugin_id="ctv_one_core_agents",
+        version="2.0.0",
+        required_runtime_contract="1.0",
+    )
+
+    def register(self, registry: AgentRegistry, catalog: CapabilityCatalog) -> None:
+        for agent in (
+            KnowledgeAgent(),
+            OperationsAgent(),
+            EmployeeAgent(),
+            ReasoningAgent(),
+            ResponseComposerAgent(),
+        ):
+            registry.register(agent)

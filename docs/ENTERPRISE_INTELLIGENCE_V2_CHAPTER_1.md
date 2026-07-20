@@ -69,6 +69,8 @@ Request instrumentation records mode, planning requirement and type, task count/
 
 Administrators can inspect aggregate state at `GET /api/v1/runtime/supervisor/status`: registry metadata, enabled/capability counts, active/completed/failed/partial plans, bypass/fallback totals, average task and latency data, safe error categories, and configured limits. The endpoint never returns request or result content.
 
+Chapter 2 wraps these agents in a lifecycle and capability runtime. See `ENTERPRISE_INTELLIGENCE_V2_CHAPTER_2.md`; Chapter 1 direct, cache, and fallback behavior remains the compatibility baseline.
+
 ## Configuration
 
 ```dotenv

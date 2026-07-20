@@ -161,6 +161,9 @@ def test_run_benchmark_records_run_relative_model_switch_metadata(
         )
     )
 
+    assert report["agent_runtime_case_count"] == 10
+    assert report["agent_runtime_success_count"] == 10
+
     first, second, third = report["results"]
     assert first["case_order"] == 1
     assert first["previous_model"] is None

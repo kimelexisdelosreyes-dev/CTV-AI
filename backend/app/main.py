@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router, dashboard_router, openai_router
+from app.agents.bootstrap import agent_runtime_manager, builtin_runtime_dependencies
 from app.connectors.bootstrap import register_builtin_connectors
 from app.core.config import settings
 from app.core.logging import configure_logging
@@ -19,6 +20,7 @@ async def lifespan(_: FastAPI):
     configure_logging()
     register_builtin_connectors()
     await inference_queue.start()
+    await agent_runtime_manager.initialize(builtin_runtime_dependencies())
     readiness = await embedding_service.readiness()
     if readiness.get("status") != "healthy":
         logging.getLogger(__name__).warning(
@@ -33,6 +35,7 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
+        await agent_runtime_manager.shutdown()
         await inference_queue.shutdown()
         sync_stop.set()
         if sync_task is not None:

@@ -117,6 +117,25 @@ class Settings(BaseSettings):
     ctv_one_supervisor_fallback_direct: bool = True
     ctv_one_supervisor_cache_enabled: bool = False
     ctv_one_supervisor_stream_events_enabled: bool = True
+    ctv_one_agent_runtime_enabled: bool = True
+    ctv_one_agent_health_poll_enabled: bool = True
+    ctv_one_agent_health_poll_seconds: float = 60.0
+    ctv_one_agent_health_timeout_seconds: float = 5.0
+    ctv_one_agent_initialize_timeout_seconds: float = 30.0
+    ctv_one_agent_shutdown_timeout_seconds: float = 15.0
+    ctv_one_agent_failure_threshold: int = 3
+    ctv_one_agent_recovery_success_threshold: int = 2
+    ctv_one_agent_knowledge_enabled: bool = True
+    ctv_one_agent_operations_enabled: bool = True
+    ctv_one_agent_employee_enabled: bool = True
+    ctv_one_agent_reasoning_enabled: bool = True
+    ctv_one_agent_composer_enabled: bool = True
+    ctv_one_agent_disabled_capabilities: str = ""
+    ctv_one_agent_default_max_inference_calls: int = 1
+    ctv_one_agent_default_max_retrieval_calls: int = 3
+    ctv_one_agent_default_max_evidence_items: int = 12
+    ctv_one_agent_default_max_output_chars: int = 16000
+    ctv_one_agent_default_max_queue_wait_seconds: float = 120.0
 
     model_config = SettingsConfigDict(
         env_file=".env",

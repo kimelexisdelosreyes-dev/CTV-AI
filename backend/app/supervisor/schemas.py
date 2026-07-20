@@ -6,6 +6,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from app.agents.models import AgentDefinition, AgentExecutionBudget, AgentResourceUsage
+
 
 SupervisorMode = Literal["direct", "supervised", "fallback_direct"]
 RequestedSupervisorMode = Literal["auto", "direct", "supervised"]
@@ -40,6 +42,10 @@ class AgentTask(BaseModel):
     timeout_seconds: float = Field(default=60.0, gt=0)
     optional: bool = False
     output_contract: str
+    agent_version: str | None = None
+    capability_version: str = "1.0"
+    contract_version: str = "1.0"
+    budget: AgentExecutionBudget | None = None
 
 
 class ExecutionPlan(BaseModel):
@@ -66,6 +72,9 @@ class AgentResult(BaseModel):
         default_factory=dict
     )
     error_category: str | None = None
+    agent_version: str | None = None
+    capability: str | None = None
+    resource_usage: AgentResourceUsage = Field(default_factory=AgentResourceUsage)
 
 
 class SupervisorResult(BaseModel):
@@ -76,21 +85,4 @@ class SupervisorResult(BaseModel):
     citations: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     partial: bool = False
-    metrics: dict[str, str | int | float | bool | list[str] | None] = Field(
-        default_factory=dict
-    )
-
-
-class AgentDefinition(BaseModel):
-    agent_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
-    name: str
-    description: str
-    capabilities: frozenset[str]
-    supported_intents: frozenset[str]
-    required_permissions: frozenset[str]
-    input_schema: str
-    output_schema: str
-    estimated_cost_class: Literal["light", "standard", "reasoning"]
-    supports_parallel_execution: bool = True
-    enabled: bool = True
-    version: str = "1.0"
+    metrics: dict[str, Any] = Field(default_factory=dict)

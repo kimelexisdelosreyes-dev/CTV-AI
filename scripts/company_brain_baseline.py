@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import asyncio
+import importlib.util
 import json
 import os
 import sys
@@ -413,6 +415,7 @@ def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
         status = "ok" if result["success"] else f"failed ({result['error']})"
         print(f"  {status} in {result['duration_seconds']}s")
 
+    runtime_report = run_agent_runtime_cases()
     return {
         "event": "company_brain_baseline_benchmark",
         "generated_at": generated_at,
@@ -424,7 +427,21 @@ def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
         "request_count": len(cases),
         "cache_passes_enabled": config.cache_passes,
         "results": results,
+        "agent_runtime_case_count": runtime_report["case_count"],
+        "agent_runtime_success_count": runtime_report["success_count"],
+        "agent_runtime_results": runtime_report["results"],
     }
+
+
+def run_agent_runtime_cases() -> dict[str, Any]:
+    """Load the offline harness explicitly; no runtime mutation endpoint is exposed."""
+    path = REPO_ROOT / "scripts" / "agent_runtime_benchmark.py"
+    spec = importlib.util.spec_from_file_location("ctv_one_agent_runtime_benchmark", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Agent runtime benchmark harness could not be loaded.")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return asyncio.run(module.run_runtime_benchmark())
 
 
 def result_type_for_error(error_category: str | None) -> str:
@@ -548,6 +565,24 @@ def prompt_metrics_from_event(event: dict[str, Any] | None) -> dict[str, Any]:
         "supervisor_fallback_used": metrics.get("supervisor_fallback_used"),
         "supervisor_partial_result": metrics.get("supervisor_partial_result"),
         "inference_queue_wait_ms": metrics.get("inference_queue_wait_ms"),
+        "agent_runtime_selected_agents": metrics.get(
+            "agent_runtime_selected_agents", []
+        ),
+        "agent_runtime_agent_versions": metrics.get(
+            "agent_runtime_agent_versions", {}
+        ),
+        "agent_runtime_capabilities": metrics.get(
+            "agent_runtime_capabilities", []
+        ),
+        "agent_runtime_budget_status": metrics.get(
+            "agent_runtime_budget_status"
+        ),
+        "agent_runtime_task_outcomes": metrics.get(
+            "agent_runtime_task_outcomes", []
+        ),
+        "agent_runtime_queue_wait_ms": metrics.get(
+            "agent_runtime_queue_wait_ms"
+        ),
     }
 
 
@@ -623,6 +658,12 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
             "supervisor_fallback_used",
             "supervisor_partial_result",
             "inference_queue_wait_ms",
+            "agent_runtime_selected_agents",
+            "agent_runtime_agent_versions",
+            "agent_runtime_capabilities",
+            "agent_runtime_budget_status",
+            "agent_runtime_task_outcomes",
+            "agent_runtime_queue_wait_ms",
             "model_selected",
             "model_role",
             "model_routing_reason",

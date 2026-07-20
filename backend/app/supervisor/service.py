@@ -5,8 +5,10 @@ from collections import Counter
 from dataclasses import dataclass
 from time import perf_counter
 
+from app.agents.bootstrap import agent_runtime_manager
+from app.agents.context import AgentExecutionContext, AgentRuntimeServices
+from app.agents.models import AgentExecutionBudget
 from app.core.config import settings
-from app.supervisor.agents import AgentExecutionContext, build_agent_registry
 from app.supervisor.execution_engine import ExecutionEngine, SupervisorEventCallback
 from app.supervisor.permissions import permissions_for_user, snapshot_authenticated_user
 from app.supervisor.planner import (
@@ -14,6 +16,7 @@ from app.supervisor.planner import (
     deterministic_plan,
     llm_plan,
     plan_depth,
+    resolve_plan_capabilities,
     select_mode,
     validate_plan,
 )
@@ -34,8 +37,9 @@ class SupervisorOutcome:
 
 class ExecutiveSupervisor:
     def __init__(self) -> None:
-        self.registry = build_agent_registry()
-        self.engine = ExecutionEngine()
+        self.runtime_manager = agent_runtime_manager
+        self.registry = agent_runtime_manager.registry
+        self.engine = ExecutionEngine(runtime_manager=agent_runtime_manager)
         self.active_plans = 0
         self.completed_plans = 0
         self.failed_plans = 0
@@ -95,6 +99,12 @@ class ExecutiveSupervisor:
             if plan is None:
                 planner_type = "llm"
                 plan = await llm_plan(request, self.registry, instrumentation)
+            plan = resolve_plan_capabilities(
+                plan,
+                self.runtime_manager,
+                permissions,
+                role=current_user.role.value,
+            )
             plan = validate_plan(plan, self.registry, permissions)
         except Exception as exc:
             category = getattr(exc, "category", "supervisor_planning_failed")
@@ -140,15 +150,35 @@ class ExecutiveSupervisor:
 
         if hasattr(db, "in_transaction") and db.in_transaction():
             await db.rollback()
+        maximum_budget = AgentExecutionBudget(
+            timeout_seconds=settings.ctv_one_supervisor_task_timeout_seconds,
+            max_inference_calls=settings.ctv_one_agent_default_max_inference_calls,
+            max_retrieval_calls=settings.ctv_one_agent_default_max_retrieval_calls,
+            max_evidence_items=settings.ctv_one_agent_default_max_evidence_items,
+            max_output_chars=settings.ctv_one_agent_default_max_output_chars,
+            max_queue_wait_seconds=settings.ctv_one_agent_default_max_queue_wait_seconds,
+        )
         context = AgentExecutionContext(
-            user=current_user,
-            db=db,
+            request_id=request_id,
+            plan_id=plan.plan_id,
+            task_id="plan",
+            authenticated_user_snapshot=current_user,
+            permissions=frozenset(permissions),
+            department=None,
+            role=current_user.role.value,
+            conversation_id=conversation_id,
+            streaming=streaming,
+            deadline=None,
+            budget=maximum_budget,
+            runtime_services=AgentRuntimeServices(
+                database_adapter=db,
+                knowledge_fetcher=knowledge_fetcher,
+                instrumentation=instrumentation,
+            ),
             question=question,
             top_k=top_k,
             route=route,
             requirements=requirements,
-            instrumentation=instrumentation,
-            knowledge_fetcher=knowledge_fetcher,
         )
         self.active_plans += 1
         try:
@@ -214,6 +244,32 @@ class ExecutiveSupervisor:
             "success_count": len(successful),
             "failure_count": len(failures),
             "timeout_count": sum(result.status == "timed_out" for result in results),
+            "agent_versions": {
+                result.agent_id: result.agent_version
+                for result in results
+                if result.agent_version
+            },
+            "capabilities": [
+                result.capability for result in results if result.capability
+            ],
+            "budget_status": (
+                "exceeded"
+                if any(
+                    result.error_category == "agent_budget_exceeded"
+                    for result in results
+                )
+                else "within_budget"
+            ),
+            "task_outcomes": [
+                ":".join(
+                    (
+                        result.agent_id,
+                        result.status,
+                        result.error_category or "none",
+                    )
+                )
+                for result in results
+            ],
         }
         supervisor_result = SupervisorResult(
             plan_id=plan.plan_id,
@@ -240,6 +296,15 @@ class ExecutiveSupervisor:
             ("supervisor_partial_result", partial),
             ("supervisor_fallback_used", False),
             ("supervisor_direct_bypass", False),
+            ("agent_runtime_selected_agents", [result.agent_id for result in results]),
+            ("agent_runtime_agent_versions", metrics["agent_versions"]),
+            ("agent_runtime_capabilities", metrics["capabilities"]),
+            ("agent_runtime_budget_status", metrics["budget_status"]),
+            ("agent_runtime_task_outcomes", metrics["task_outcomes"]),
+            (
+                "agent_runtime_queue_wait_ms",
+                round(sum(result.resource_usage.queue_wait_ms for result in results), 3),
+            ),
         ):
             self._metric(instrumentation, name, value)
         return SupervisorOutcome(mode="supervised", result=supervisor_result, plan=plan)
@@ -253,6 +318,13 @@ class ExecutiveSupervisor:
 
     async def status(self) -> dict[str, object]:
         definitions = self.registry.definitions()
+        runtime_status = await self.runtime_manager.status()
+        unavailable_required = [
+            item["agent_id"]
+            for item in runtime_status["agents"]
+            if item["lifecycle_state"] not in {"ready", "degraded"}
+            and self.registry.get(item["agent_id"]).definition.required
+        ]
         return {
             "enabled": settings.ctv_one_supervisor_enabled,
             "planner_enabled": settings.ctv_one_supervisor_llm_planning_enabled,
@@ -285,6 +357,12 @@ class ExecutiveSupervisor:
                 "task_timeout_seconds": settings.ctv_one_supervisor_task_timeout_seconds,
                 "total_timeout_seconds": settings.ctv_one_supervisor_total_timeout_seconds,
             },
+            "runtime_ready": not unavailable_required,
+            "resolvable_capabilities": runtime_status["available_capability_count"],
+            "unavailable_required_agents": unavailable_required,
+            "capability_resolution_failures": runtime_status.get("metrics", {}).get(
+                "capability_resolution_failure_count", 0
+            ),
         }
 
     @staticmethod
