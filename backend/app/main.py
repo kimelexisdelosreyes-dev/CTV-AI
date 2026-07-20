@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router, dashboard_router, openai_router
 from app.agents.bootstrap import agent_runtime_manager, builtin_runtime_dependencies
+from app.atlas.bootstrap import atlas_runtime_manager
 from app.connectors.bootstrap import register_builtin_connectors
 from app.core.config import settings
 from app.core.logging import configure_logging
@@ -22,6 +23,9 @@ async def lifespan(_: FastAPI):
     register_builtin_connectors()
     await inference_queue.start()
     await agent_runtime_manager.initialize(builtin_runtime_dependencies())
+    # Atlas owns an empty, idle provider registry in Sprint 3.1. It is started
+    # independently after Forge and never participates in request processing.
+    await atlas_runtime_manager.initialize()
     readiness = await embedding_service.readiness()
     if readiness.get("status") != "healthy":
         logging.getLogger(__name__).warning(
@@ -36,6 +40,7 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
+        await atlas_runtime_manager.shutdown()
         await agent_runtime_manager.shutdown()
         await inference_queue.shutdown()
         sync_stop.set()

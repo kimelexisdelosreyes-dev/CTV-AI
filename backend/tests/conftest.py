@@ -14,6 +14,7 @@ TEST_ENVIRONMENT = {
     "CTV_ONE_INFERENCE_QUEUE_ENABLED": "false",
     "CTV_ONE_SUPERVISOR_ENABLED": "false",
     "CTV_ONE_AGENT_HEALTH_POLL_ENABLED": "false",
+    "CTV_ONE_ATLAS_HEALTH_POLL_ENABLED": "false",
 }
 
 for name, value in TEST_ENVIRONMENT.items():

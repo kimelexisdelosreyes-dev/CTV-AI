@@ -142,6 +142,17 @@ class Settings(BaseSettings):
     ctv_one_agent_composition_max_chars_per_result: int = 2500
     ctv_one_agent_composition_max_total_chars: int = 8000
     ctv_one_semantic_cache_hot_exact_max_entries: int = 128
+    ctv_one_atlas_enabled: bool = True
+    ctv_one_atlas_runtime_version: str = "1.0.0"
+    ctv_one_atlas_provider_contract_version: str = "1.0"
+    ctv_one_atlas_context_package_version: str = "1.0"
+    ctv_one_atlas_health_poll_enabled: bool = True
+    ctv_one_atlas_health_poll_seconds: float = 60.0
+    ctv_one_atlas_health_timeout_seconds: float = 5.0
+    ctv_one_atlas_initialize_timeout_seconds: float = 30.0
+    ctv_one_atlas_shutdown_timeout_seconds: float = 15.0
+    ctv_one_atlas_failure_threshold: int = 3
+    ctv_one_atlas_recovery_threshold: int = 2
 
     model_config = SettingsConfigDict(
         env_file=".env",
