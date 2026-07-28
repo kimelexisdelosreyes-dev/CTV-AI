@@ -1,0 +1,3 @@
+import type { ProviderRetryPolicy } from "./ProviderTypes";
+export const noRetry: ProviderRetryPolicy = { attempts: 0, baseDelayMs: 0, backoff: "none" };
+export async function withRetry<T>(operation: (attempt: number) => Promise<T>, policy: ProviderRetryPolicy = noRetry, sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms))): Promise<T> { let attempt = 0; while (true) { try { return await operation(attempt); } catch (error) { if (attempt >= policy.attempts) throw error; attempt += 1; const delay = policy.backoff === "exponential" ? policy.baseDelayMs * (2 ** (attempt - 1)) : policy.baseDelayMs; if (delay > 0) await sleep(delay); } } }

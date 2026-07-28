@@ -1,0 +1,4 @@
+import type { AIModelAdapterError } from "@/contracts/model-runtime";
+const freeze=<T>(v:T):T=>Object.freeze(v);
+const clean=(text:string)=>text.replace(/(bearer\s+\S+|api[_-]?key\s*[:=]\s*\S+|https?:\/\/\S+|\b[A-Za-z]:\\\S+)/gi,"[redacted]").replace(/[\r\n]/g," ").slice(0,240);
+export const ollamaError=(status:number|undefined,message:string):AIModelAdapterError=>{const category=status===401?"authentication":status===403?"authorization":status===404?"unavailable":status===408||status===504?"timeout":status===429?"rate-limit":status!==undefined&&status>=500?"provider-error":status!==undefined?"validation":"transport";return freeze({code:`ollama-${status??"transport"}`,category,retryable:category==="transport"||category==="timeout"||category==="rate-limit"||category==="provider-error",fallbackEligible:!["authentication","authorization","validation","cancellation"].includes(category),message:clean(message)});};

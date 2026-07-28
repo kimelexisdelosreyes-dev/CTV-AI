@@ -10,6 +10,26 @@ import {
 } from "react";
 
 import {
+  AIConfidenceBadge,
+  AIThinkingPanel,
+  AISourceReference,
+  BaseCard,
+  EmptyState,
+  Inline,
+  InlineAlert,
+  LoadingSkeleton,
+  PageHeader,
+  PageShell,
+  PageTitle,
+  PrimaryButton,
+  SecondaryButton,
+  Select,
+  StatusBadge,
+  TextArea,
+  Checkbox,
+  ResponsiveGrid,
+} from "@/design-system";
+import {
   apiFetch,
   Conversation,
   ConversationDetailResponse,
@@ -359,68 +379,64 @@ export function CompanyBrain({
   }
 
   return (
-    <section>
-      <div className="page-heading">
-        <div>
-          <span className="eyebrow">ROUTED ENTERPRISE INTELLIGENCE</span>
-          <h1>Company Brain</h1>
-          <p>
-            CTV ONE chooses the right knowledge and operational sources before
-            generating an answer.
-          </p>
-        </div>
-      </div>
+    <PageShell>
+      <PageHeader
+        eyebrow="MY AI"
+        title={<PageTitle>My AI</PageTitle>}
+        description={<p className="ctv-body">Personal Memory, Organizational Memory, and Work Sessions help CTV ONE support your work without exposing internal AI systems.</p>}
+        action={<StatusBadge status={askBusy ? "processing" : "healthy"}>{askBusy ? "AI Activity running" : "Ready"}</StatusBadge>}
+      />
 
       <div className="brain-layout">
-        <aside className="panel brain-recents">
-          <button onClick={startNewChat}>New Chat</button>
-          <h2>Recents</h2>
+        <aside className="brain-recents">
+          <PrimaryButton onClick={startNewChat}>New Work Session</PrimaryButton>
+          <h2 className="ctv-section-title">Work Sessions</h2>
           {recentsLoading && recents.length === 0 && (
-            <p className="muted">Loading conversations.</p>
+            <LoadingSkeleton lines={4} />
           )}
-          {recentsError && <p className="error">{recentsError}</p>}
+          {recentsError && <InlineAlert title="Could not load Work Sessions" status="critical">{recentsError}</InlineAlert>}
           {!recentsLoading && recents.length === 0 && (
-            <p className="muted">No conversations yet.</p>
+            <EmptyState title="Your AI is ready to learn how you work.">
+              Begin a Work Session or teach it a professional workflow.
+            </EmptyState>
           )}
 
           <div className="recent-list">
             {recents.map((conversation) => (
-              <article
-                className={
-                  activeConversationId === conversation.id
-                    ? "recent-item active"
-                    : "recent-item"
-                }
+              <BaseCard
+                interactive
                 key={conversation.id}
+                title={conversation.title}
+                meta={formatDate(conversation.updated_at)}
+                action={activeConversationId === conversation.id ? <StatusBadge status="processing">Active</StatusBadge> : undefined}
               >
-                <button onClick={() => setActiveConversationId(conversation.id)}>
-                  <b>{conversation.title}</b>
-                  <span>{formatDate(conversation.updated_at)}</span>
-                </button>
-                <div className="recent-actions">
-                  <button onClick={() => renameConversation(conversation)}>
+                <Inline>
+                  <SecondaryButton size="small" onClick={() => setActiveConversationId(conversation.id)}>
+                    Resume
+                  </SecondaryButton>
+                  <SecondaryButton size="small" onClick={() => renameConversation(conversation)}>
                     Rename
-                  </button>
-                  <button onClick={() => archiveConversation(conversation)}>
+                  </SecondaryButton>
+                  <SecondaryButton size="small" onClick={() => archiveConversation(conversation)}>
                     Archive
-                  </button>
-                  <button onClick={() => deleteConversation(conversation)}>
+                  </SecondaryButton>
+                  <SecondaryButton size="small" onClick={() => deleteConversation(conversation)}>
                     Delete
-                  </button>
-                </div>
-              </article>
+                  </SecondaryButton>
+                </Inline>
+              </BaseCard>
             ))}
           </div>
 
           {hasMoreRecents && (
-            <button onClick={() => loadRecents(recents.length)}>Load more</button>
+            <SecondaryButton onClick={() => loadRecents(recents.length)}>Load more</SecondaryButton>
           )}
         </aside>
 
         <div>
-          <article className="panel company-brain-chat">
-            <label>Knowledge routing</label>
-            <select
+          <BaseCard className="company-brain-chat" title="Ask CTV ONE" meta="Visible activity only. No private reasoning is shown.">
+            <Select
+              label="Knowledge routing"
               value={collection}
               onChange={(event) => setCollection(event.target.value)}
             >
@@ -430,7 +446,7 @@ export function CompanyBrain({
                   Force: {item.name}
                 </option>
               ))}
-            </select>
+            </Select>
 
             <div className="message-list">
               {messages.map((message) => (
@@ -445,12 +461,24 @@ export function CompanyBrain({
                 </article>
               ))}
               {messages.length === 0 && (
-                <p className="muted">Start a conversation with Company Brain.</p>
+                <EmptyState title="Your AI is ready to learn how you work.">
+                  Ask about policies, work sessions, project context, deadlines,
+                  and Knowledge Center sources.
+                </EmptyState>
               )}
             </div>
 
-            <label>Question</label>
-            <textarea
+            {askBusy && (
+              <AIThinkingPanel steps={[
+                { label: "Understanding your request", complete: streamStatus !== "preparing" },
+                { label: "Searching Enterprise Files", complete: streamStatus === "generating" || streamStatus === "streaming" },
+                { label: "Reading Knowledge Center", complete: streamStatus === "streaming" },
+                { label: "Preparing response", complete: streamStatus === "streaming" },
+              ]} />
+            )}
+
+            <TextArea
+              label="Request"
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               placeholder={
@@ -459,18 +487,13 @@ export function CompanyBrain({
               }
             />
 
-            <label className="context-toggle">
-              <input
-                type="checkbox"
-                checked={useEmployeeContext}
-                onChange={(event) =>
-                  setUseEmployeeContext(event.target.checked)
-                }
-              />
-              Use employee context
-            </label>
+            <Checkbox
+              label="Use Personal Memory and Work Sessions"
+              checked={useEmployeeContext}
+              onChange={(event) => setUseEmployeeContext(event.target.checked)}
+            />
 
-            <button onClick={ask} disabled={askBusy || !draft.trim()}>
+            <PrimaryButton onClick={ask} disabled={askBusy || !draft.trim()}>
               {askBusy
                 ? streamStatus === "preparing"
                   ? "Preparing context..."
@@ -478,20 +501,20 @@ export function CompanyBrain({
                     ? "Generating answer..."
                     : "Generating..."
                 : "Ask Company Brain"}
-            </button>
+            </PrimaryButton>
             {askBusy && (
-              <button onClick={stopStreaming} type="button">
+              <SecondaryButton onClick={stopStreaming} type="button">
                 Stop
-              </button>
+              </SecondaryButton>
             )}
 
-            {askError && <p className="error">{askError}</p>}
-          </article>
+            {askError && <InlineAlert title="AI Activity stopped" status="critical">{askError}</InlineAlert>}
+          </BaseCard>
 
           {personalization && (
-            <article className="panel answer-panel">
-              <h2>Latest Intelligence Used</h2>
+            <BaseCard className="answer-panel" title="Latest Intelligence Used">
               <div className="personalization-card">
+                <AIConfidenceBadge value={personalization.routing_confidence > 0.75 ? "high" : personalization.routing_confidence > 0.45 ? "medium" : "low"} />
                 <span>
                   Intent: {personalization.routed_intent} - Confidence:{" "}
                   {Math.round(personalization.routing_confidence * 100)}%
@@ -517,35 +540,26 @@ export function CompanyBrain({
                   <span>{personalization.operational_summary}</span>
                 )}
               </div>
-            </article>
+            </BaseCard>
           )}
 
           {sources.length > 0 && (
-            <article className="panel">
-              <h2>Document Sources</h2>
+            <BaseCard title="Document Sources">
 
-              <div className="source-list">
+              <ResponsiveGrid min="260px">
                 {sources.map((source, index) => (
-                  <div
-                    className="source-card"
+                  <AISourceReference
                     key={`${source.document_id}-${source.chunk_index}`}
-                  >
-                    <b>
-                      Source {index + 1}: {source.filename}
-                    </b>
-                    <span>
-                      {source.category} - score {source.score.toFixed(3)}
-                      {source.page_number ? ` - page ${source.page_number}` : ""}
-                    </span>
-                    <p>{source.text}</p>
-                  </div>
+                    title={`Source ${index + 1}: ${source.filename}`}
+                    source={`${source.category} - score ${source.score.toFixed(3)}${source.page_number ? ` - page ${source.page_number}` : ""}`}
+                  />
                 ))}
-              </div>
-            </article>
+              </ResponsiveGrid>
+            </BaseCard>
           )}
         </div>
       </div>
-    </section>
+    </PageShell>
   );
 }
 

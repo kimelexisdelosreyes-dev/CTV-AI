@@ -1,0 +1,13 @@
+export type MemoryConfidence = "confirmed" | "supported" | "observed" | "imported" | "unknown";
+export type MemoryEvidenceType = "observation" | "event" | "timeline" | "graph_reference" | "provider_reference";
+export type MemoryEvidenceSource = "provider" | "graph" | "context" | "import" | "unknown";
+export type MemoryEvidenceReference = Readonly<{ observationId?: string; eventId?: string; timelineEntryId?: string; graphNodeId?: string; providerId?: string }>;
+export type MemoryEvidence = Readonly<{ id: string; type: MemoryEvidenceType; source: MemoryEvidenceSource; reference: MemoryEvidenceReference; timestamp?: string }>;
+export type MemoryRelationship = Readonly<{ type: string; targetRecordId?: string; targetEntityId?: string; temporal: true; evidence: readonly MemoryEvidence[] }>;
+export type MemoryContributionSource = "provider" | "graph_runtime" | "context" | "import";
+export type MemoryContributionStatus = "accepted" | "rejected" | "incomplete" | "unsupported";
+export type MemoryContribution = Readonly<{ source: MemoryContributionSource; observationIds: readonly string[]; eventIds: readonly string[]; evidence: readonly MemoryEvidence[]; entityId?: string; graphNodeId?: string; observationType?: string; occurredAt?: string; providerId?: string }>;
+export type MemoryContributionResult = Readonly<{ status: MemoryContributionStatus; diagnostics: readonly string[] }>;
+export type MemoryRecord = Readonly<{ id: string; entityIds: readonly string[]; graphNodeIds: readonly string[]; observationIds: readonly string[]; eventIds: readonly string[]; timelineEntryIds: readonly string[]; evidence: readonly MemoryEvidence[]; confidence: MemoryConfidence; relationships: readonly MemoryRelationship[]; diagnostics: readonly string[] }>;
+export type MemoryStatistics = Readonly<{ observationCount: number; eventCount: number; timelineCount: number; recordCount: number; providerCount: number; evidenceCount: number; relationshipCount: number }>;
+export type MemoryDiagnostics = Readonly<{ missingEvidence: number; timelineGap: number; duplicateObservation: number; unknownEntity: number; conflictingObservation: number; unsupportedEvent: number; missingTimestamp: number; incompleteEvidence: number; messages: readonly string[] }>;

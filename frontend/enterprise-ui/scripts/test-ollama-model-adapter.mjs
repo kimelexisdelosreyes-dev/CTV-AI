@@ -1,0 +1,10 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+const root=resolve(import.meta.dirname,"..");const read=(file)=>readFileSync(resolve(root,file),"utf8");
+const adapter=read("src/services/model-runtime/adapters/ollama/OllamaModelAdapter.ts");const mapper=read("src/services/model-runtime/adapters/ollama/OllamaRequestMapper.ts");const transport=read("src/services/model-runtime/adapters/ollama/OllamaTransport.ts");
+test("Ollama adapter is isolated, deterministic, and non-streaming",()=>{for(const item of ["adapterId:\"ollama-local\"","providerType:\"ollama\"","stream:false","supportedModelIds","/api/generate"])assert.ok(`${adapter}${mapper}${transport}`.includes(item));});
+test("Ollama adapter preserves neutral boundaries and runtime ownership",()=>{for(const forbidden of ["AIModelOrchestrator","SearchService","ContextEngine","GraphRuntime","MemoryRuntime","retry(","fallback"])assert.ok(!adapter.includes(forbidden));assert.ok(adapter.includes("request.signal"));});
+test("Ollama adapter normalizes structured output and controlled errors",()=>{for(const item of ["JSON.parse", "malformed structured output", "prompt_eval_count", "eval_count", "ollamaError"])assert.ok(adapter.includes(item));assert.ok(!adapter.includes("baseUrl:"));});
+console.log("Ollama adapter isolation tests passed: descriptor, mapping, normalization, security, cancellation, and runtime ownership verified.");

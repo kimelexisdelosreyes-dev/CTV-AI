@@ -1,0 +1,2 @@
+import type { FetchLike } from "./OllamaContracts";
+export class OllamaTransport { constructor(private readonly baseUrl:string,private readonly fetcher:FetchLike){} async generate(payload:unknown,signal:AbortSignal):Promise<{status:number;body:unknown}>{const response=await this.fetcher(`${this.baseUrl.replace(/\/$/,"")}/api/generate`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload),signal});let body:unknown;try{body=await response.json();}catch{body=undefined;}return {status:response.status,body};} }

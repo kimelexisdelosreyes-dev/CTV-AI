@@ -1,28 +1,46 @@
+import {
+  AIRecommendationCard,
+  EmptyState,
+  PageHeader,
+  PageShell,
+  PageTitle,
+  PrimaryButton,
+  ResponsiveGrid,
+  StatusBadge,
+} from "@/design-system";
+
 const assistants = [
-  ["CTV-AI Auto", "Automatically routes each request to the correct specialist."],
-  ["Production", "Documentaries, interviews, scripts, shot lists, and editing."],
-  ["Graphics", "Branding, posters, thumbnails, and creative prompts."],
-  ["Drone", "Aerial cinematography, planning, and equipment workflows."],
-  ["IT", "Networking, NAS, Windows, Docker, storage, and troubleshooting."],
-  ["Comedy", "Opt-in burnout breaks, friendly roasting, and team banter."],
+  ["Write", "Draft scripts, briefs, captions, and production notes."],
+  ["Research", "Search approved Organizational Memory and project context."],
+  ["Generate Subtitles", "Prepare subtitles for review and export."],
+  ["Enhance Images", "Improve production and archive images for review."],
+  ["Build Presentations", "Create polished decks from approved context."],
+  ["Search Archives", "Find useful historical material and Enterprise Assets."],
 ];
 
 export function Assistants() {
   return (
-    <section>
-      <div className="page-heading">
-        <div><span className="eyebrow">SPECIALISTS</span><h1>AI Assistants</h1><p>One platform, multiple areas of expertise.</p></div>
-      </div>
-      <div className="assistant-grid">
+    <PageShell>
+      <PageHeader
+        eyebrow="AI STUDIO"
+        title={<PageTitle>AI Studio</PageTitle>}
+        description={<p className="ctv-body">Capability-first AI workflows for writing, research, media, and production work.</p>}
+        action={<StatusBadge status="processing">AI Activity ready</StatusBadge>}
+      />
+      <ResponsiveGrid min="240px">
         {assistants.map(([name, description]) => (
-          <article className="assistant-card" key={name}>
-            <div className="assistant-orb">{name.slice(0, 1)}</div>
-            <h3>{name}</h3>
-            <p>{description}</p>
-            <span>Available in Open WebUI</span>
-          </article>
+          <AIRecommendationCard
+            action={<PrimaryButton size="small">Open</PrimaryButton>}
+            key={name}
+            recommendation={description}
+            title={name}
+          />
         ))}
-      </div>
-    </section>
+      </ResponsiveGrid>
+      <EmptyState title="No AI jobs are currently running.">
+        Start a capability above when you are ready to create, research, or
+        prepare production assets.
+      </EmptyState>
+    </PageShell>
   );
 }

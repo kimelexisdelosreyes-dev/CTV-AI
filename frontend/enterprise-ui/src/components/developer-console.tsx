@@ -74,7 +74,10 @@ export function DeveloperConsole() {
   }, []);
 
   useEffect(() => {
-    loadDeveloperConsole();
+    const handle = window.setTimeout(() => {
+      void loadDeveloperConsole();
+    }, 0);
+    return () => window.clearTimeout(handle);
   }, [loadDeveloperConsole]);
 
   async function setDeveloperMode(enabled: boolean) {

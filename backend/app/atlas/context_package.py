@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, field_validator, model_validator
 
+from app.atlas.canonical import FrozenJson, canonical_json, fingerprint
+from app.atlas.compiler_contracts import AtlasClassification, AtlasConflict, AtlasContextManifest, AtlasManifestReference, AtlasProvenance
 from app.atlas.constants import (
     ATLAS_CONTEXT_PACKAGE_VERSION,
     ATLAS_MAX_CONTEXT_METADATA_ITEMS,
@@ -24,43 +26,56 @@ from app.atlas.models import (
 
 
 class AtlasContextNode(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     node_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
     node_type: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     label: str = Field(min_length=1, max_length=256)
-    attributes: dict[str, JsonValue] = Field(default_factory=dict, max_length=24)
+    attributes: FrozenJson = Field(default_factory=FrozenJson)
+    provenance: AtlasProvenance | None = None
+    classification: AtlasClassification = AtlasClassification.INTERNAL
+    score_points: int = 0
+    ordinal: int = Field(default=0, ge=0)
 
     @field_validator("attributes")
     @classmethod
-    def validate_attributes(cls, value: dict[str, JsonValue]) -> dict[str, JsonValue]:
-        validate_safe_json_keys(value)
-        return value
+    def validate_attributes(cls, value: object) -> FrozenJson:
+        frozen = value if isinstance(value, FrozenJson) else FrozenJson(value)
+        validate_safe_json_keys(frozen.to_python())
+        return frozen
 
 
 class AtlasContextRelationship(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     relationship_type: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     source_node_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
     target_node_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
-    attributes: dict[str, JsonValue] = Field(default_factory=dict, max_length=16)
+    attributes: FrozenJson = Field(default_factory=FrozenJson)
+    provenance: AtlasProvenance | None = None
+    classification: AtlasClassification = AtlasClassification.INTERNAL
+    score_points: int = 0
+    ordinal: int = Field(default=0, ge=0)
 
     @field_validator("attributes")
     @classmethod
-    def validate_attributes(cls, value: dict[str, JsonValue]) -> dict[str, JsonValue]:
-        validate_safe_json_keys(value)
-        return value
+    def validate_attributes(cls, value: object) -> FrozenJson:
+        frozen = value if isinstance(value, FrozenJson) else FrozenJson(value)
+        validate_safe_json_keys(frozen.to_python())
+        return frozen
 
 
 class AtlasEvidenceItem(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     evidence_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
     provider_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     excerpt: str = Field(min_length=1, max_length=4_000)
     classification: str = Field(pattern=r"^(internal|confidential|restricted)$")
     citation_ids: tuple[str, ...] = Field(default=(), max_length=16)
+    provenance: AtlasProvenance | None = None
+    score_points: int = 0
+    ordinal: int = Field(default=0, ge=0)
 
     @field_validator("citation_ids")
     @classmethod
@@ -71,16 +86,19 @@ class AtlasEvidenceItem(BaseModel):
 
 
 class AtlasCitation(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     citation_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
     provider_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     source_reference: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
     label: str = Field(min_length=1, max_length=256)
+    provenance: AtlasProvenance | None = None
+    classification: AtlasClassification = AtlasClassification.INTERNAL
+    ordinal: int = Field(default=0, ge=0)
 
 
 class AtlasContextWarning(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     category: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     safe_message: str = Field(min_length=1, max_length=512)
@@ -88,7 +106,7 @@ class AtlasContextWarning(BaseModel):
 
 
 class AtlasContextBudgetUsage(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     provider_count: int = Field(default=0, ge=0, le=32)
     node_count: int = Field(default=0, ge=0, le=128)
@@ -98,7 +116,7 @@ class AtlasContextBudgetUsage(BaseModel):
 
 
 class AtlasOptimizationStats(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     applied: bool = False
     omitted_item_count: int = Field(default=0, ge=0)
@@ -109,27 +127,52 @@ class AtlasOptimizationStats(BaseModel):
 class AtlasContextPackage(BaseModel):
     """Versioned, bounded future context artifact; no provider creates one in 3.1."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     contract_version: str = ATLAS_CONTEXT_PACKAGE_VERSION
     request_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
-    created_at: datetime = Field(default_factory=utc_now)
+    # Epoch preserves valid empty construction without introducing wall-clock entropy.
+    created_at: datetime = Field(default_factory=lambda: datetime(1970, 1, 1, tzinfo=timezone.utc))
+    snapshot_fingerprint: str = ""
+    compiler_policy_fingerprint: str = ""
+    air_version: str = "1.0"
     selected_provider_ids: tuple[str, ...] = Field(default=(), max_length=32)
     provider_results: tuple[AtlasProviderResult, ...] = Field(default=(), max_length=32)
     nodes: tuple[AtlasContextNode, ...] = Field(default=(), max_length=128)
     relationships: tuple[AtlasContextRelationship, ...] = Field(default=(), max_length=256)
     evidence: tuple[AtlasEvidenceItem, ...] = Field(default=(), max_length=256)
     citations: tuple[AtlasCitation, ...] = Field(default=(), max_length=256)
+    conflicts: tuple[AtlasConflict, ...] = Field(default=(), max_length=64)
     warnings: tuple[AtlasContextWarning, ...] = Field(default=(), max_length=64)
     budgets: AtlasContextBudgetUsage = Field(default_factory=AtlasContextBudgetUsage)
     optimization: AtlasOptimizationStats = Field(default_factory=AtlasOptimizationStats)
-    metrics: dict[str, float] = Field(default_factory=dict, max_length=32)
-    metadata: dict[str, str] = Field(default_factory=dict, max_length=ATLAS_MAX_CONTEXT_METADATA_ITEMS)
+    # Runtime metrics are deliberately excluded from deterministic package content.
+    metrics: FrozenJson = Field(default_factory=FrozenJson)
+    metadata: FrozenJson = Field(default_factory=FrozenJson)
+    manifest: AtlasContextManifest | None = None
+    manifest_reference: AtlasManifestReference | None = None
+    package_fingerprint: str = ""
+
+    @field_validator("selected_provider_ids", mode="before")
+    @classmethod
+    def canonical_provider_order(cls, values: object) -> tuple[str, ...]:
+        return tuple(sorted(values or ()))
+
+    @field_validator("nodes", "relationships", "evidence", "citations", "warnings", "conflicts", mode="before")
+    @classmethod
+    def canonical_item_order(cls, values: object) -> tuple[object, ...]:
+        def key(item: object) -> tuple[object, ...]:
+            if isinstance(item, BaseModel):
+                data = item.model_dump(mode="python")
+            else:
+                data = item if isinstance(item, dict) else {}
+            return (data.get("provider_id", ""), data.get("ordinal", 0), data.get("node_id", data.get("relationship_type", data.get("evidence_id", data.get("citation_id", data.get("category", data.get("conflict_id", "")))))))
+        return tuple(sorted(values or (), key=key))
 
     @field_validator("contract_version")
     @classmethod
     def validate_contract_version(cls, value: str) -> str:
-        if value != ATLAS_CONTEXT_PACKAGE_VERSION or not CONTRACT_VERSION_PATTERN.fullmatch(value):
+        if value not in {"1.0", ATLAS_CONTEXT_PACKAGE_VERSION} or not CONTRACT_VERSION_PATTERN.fullmatch(value):
             raise ValueError("Unsupported Atlas context package contract version.")
         return value
 
@@ -144,7 +187,11 @@ class AtlasContextPackage(BaseModel):
 
     @field_validator("metadata")
     @classmethod
-    def validate_metadata(cls, values: dict[str, str]) -> dict[str, str]:
+    def validate_metadata(cls, values: object) -> FrozenJson:
+        frozen = values if isinstance(values, FrozenJson) else FrozenJson(values)
+        values = frozen.to_python()
+        if not isinstance(values, dict) or len(values) > ATLAS_MAX_CONTEXT_METADATA_ITEMS:
+            raise ValueError("Atlas metadata is bounded.")
         prohibited = {"prompt", "reasoning", "exception", "traceback", "secret", "credential"}
         for key, value in values.items():
             if not STABLE_REFERENCE_PATTERN.fullmatch(key):
@@ -153,17 +200,21 @@ class AtlasContextPackage(BaseModel):
                 raise ValueError("Atlas metadata key is not permitted.")
             if len(value) > ATLAS_MAX_CONTEXT_METADATA_VALUE_CHARS:
                 raise ValueError("Atlas metadata values are bounded.")
-        return values
+        return frozen
 
     @field_validator("metrics")
     @classmethod
-    def validate_metrics(cls, values: dict[str, float]) -> dict[str, float]:
+    def validate_metrics(cls, values: object) -> FrozenJson:
+        frozen = values if isinstance(values, FrozenJson) else FrozenJson(values)
+        values = frozen.to_python()
+        if not isinstance(values, dict):
+            raise ValueError("Atlas metrics must be an object.")
         for key in values:
             if not STABLE_REFERENCE_PATTERN.fullmatch(key):
                 raise ValueError("Atlas metric keys must be stable references.")
             if any(term in key.lower() for term in {"prompt", "reasoning", "exception", "traceback"}):
                 raise ValueError("Atlas metric key is not permitted.")
-        return values
+        return frozen
 
     @model_validator(mode="after")
     def validate_package(self) -> AtlasContextPackage:
@@ -203,15 +254,24 @@ class AtlasContextPackage(BaseModel):
             for result in self.provider_results
         ):
             raise ValueError("Atlas provider result exceeds its bounded size.")
+        if self.package_fingerprint and self.package_fingerprint != self.computed_fingerprint():
+            raise ValueError("Atlas package fingerprint is invalid.")
         return self
 
     def deterministic_json(self) -> str:
-        return json.dumps(
-            self.model_dump(mode="json"),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        )
+        return canonical_json(self.deterministic_content())
+
+    def deterministic_content(self) -> dict[str, object]:
+        content = self.model_dump(mode="python")
+        content["metrics"] = {}  # runtime observations are never fingerprinted
+        content["package_fingerprint"] = ""
+        return content
+
+    def computed_fingerprint(self) -> str:
+        return fingerprint(self.deterministic_content())
+
+    def serialized_bytes(self) -> int:
+        return len(self.deterministic_json().encode("utf-8"))
 
 
 def create_empty_context_package(request_id: str) -> AtlasContextPackage:

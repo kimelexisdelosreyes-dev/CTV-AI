@@ -78,8 +78,9 @@ async def server_timing_middleware(request: Request, call_next):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://127.0.0.1:3001",
-        "http://localhost:3001",
+        origin.strip()
+        for origin in settings.cors_allowed_origins.split(",")
+        if origin.strip()
     ],
     allow_credentials=True,
     allow_methods=["*"],

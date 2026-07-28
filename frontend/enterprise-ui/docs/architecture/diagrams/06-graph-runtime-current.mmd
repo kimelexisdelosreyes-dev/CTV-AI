@@ -1,0 +1,6 @@
+flowchart LR
+  C[ContextSnapshot] --> A[ContextGraphAdapter]
+  A --> B[GraphBuilder]
+  B --> G[GraphSnapshot]
+  G --> Q[GraphQueryEngine]
+  Q -. partial presentation integration .-> P[Existing relationship UI fallback]

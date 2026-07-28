@@ -1,0 +1,17 @@
+export type GraphEntityId = string;
+export type GraphNodeId = string;
+export type GraphEdgeId = string;
+export type GraphDirection = "outgoing" | "incoming" | "both";
+export type GraphRelationshipType = "belongs_to" | "contains" | "references" | "stored_on" | "transcript_of" | "related_to" | "hosted_on" | "rendered_by" | "executed_by" | "assigned_to" | "connected_to" | "backs_up" | "indexes" | "mirrors" | "supports" | "accelerated_by";
+export type GraphSourceAttribution = { source: string; sourceId?: string; providerId?: string; evidence?: string; confidence?: number; temporalEvidence?: readonly TemporalEvidence[] };
+export type GraphNode = { id: GraphNodeId; canonicalId: GraphEntityId; entityType: string; label: string; sourceIds: string[]; providerIds: string[]; aliases: string[]; provisional: boolean; provenance: GraphSourceAttribution[]; metadata?: Record<string, string> };
+export type GraphEdge = { id: GraphEdgeId; from: GraphNodeId; to: GraphNodeId; type: GraphRelationshipType; direction: "directed"; provisional: boolean; provenance: GraphSourceAttribution[]; metadata?: Record<string, string> };
+export type GraphPath = { nodes: GraphNodeId[]; edges: GraphEdgeId[]; truncated: boolean };
+export type GraphTraversalOptions = { depth?: number; maxNodes?: number; maxEdges?: number; relationshipTypes?: GraphRelationshipType[]; entityTypes?: string[]; signal?: AbortSignal };
+export type GraphNeighborhood = { center: GraphNode | undefined; nodes: GraphNode[]; edges: GraphEdge[]; relationshipCounts: Record<string, number>; truncated: boolean; diagnostics: string[] };
+export type GraphDiagnostics = { invalidNodes: number; invalidEdges: number; selfLoopsRejected: number; unresolvedReferences: number; duplicateNodeMerges: number; duplicateEdgeMerges: number; provisionalNodes: number; cyclesEncountered: number; traversalTruncations: number; sourceContributionCount: number };
+export type GraphSnapshot = Readonly<{ id: string; createdAt: string; nodes: readonly GraphNode[]; edges: readonly GraphEdge[]; sourceContextSnapshot?: string; unresolvedReferences: readonly { from: string; type: string; targetLabel: string; source: string }[]; diagnostics: Readonly<GraphDiagnostics>; statistics: Readonly<{ nodeCount: number; edgeCount: number; entityCounts: Record<string, number>; relationshipCounts: Record<string, number>; sourceProviderCount: number }> }>;
+export interface IRelationshipGraph { getNode(id: string): GraphNode | undefined; getEdge(id: string): GraphEdge | undefined; neighbors(id: string, options?: GraphTraversalOptions): GraphNeighborhood; incoming(id: string, options?: GraphTraversalOptions): GraphEdge[]; outgoing(id: string, options?: GraphTraversalOptions): GraphEdge[]; snapshot(sourceContextSnapshot?: string): GraphSnapshot; }
+export interface IGraphBuilder { fromContext(snapshot: { entities: readonly { id: string; type: string; label: string; sourceIds: string[]; confidence: string }[]; relationships: readonly { from: string; to: string; type: string; source: string; confidence?: number }[]; temporalEvidence: readonly TemporalEvidence[]; createdAt: string }): GraphSnapshot; }
+export interface IGraphQueryEngine { traverse(startId: string, options?: GraphTraversalOptions): GraphNeighborhood; shortestPath(from: string, to: string, options?: GraphTraversalOptions): GraphPath | undefined; }
+import type { TemporalEvidence } from "@/contracts/temporal";

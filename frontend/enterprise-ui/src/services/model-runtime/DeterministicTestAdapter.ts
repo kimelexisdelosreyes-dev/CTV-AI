@@ -1,0 +1,6 @@
+import type { AIModelAdapter, AIModelAdapterRequest, AIModelAdapterResult } from "@/contracts/model-runtime";
+export class DeterministicTestAdapter implements AIModelAdapter {
+  readonly descriptor = Object.freeze({adapterId:"deterministic-test",adapterVersion:"1",providerType:"internal" as const,supportedModelIds:["test-model"],supportedLocations:["local" as const],supportedExecutionModes:["synchronous" as const],supportsCancellation:true,supportsTimeout:true,supportsStreaming:false,supportsBatch:false,enabled:true,priority:0});
+  supports(request: Readonly<{modelId:string}>):boolean { return request.modelId === "test-model"; }
+  async execute(request:AIModelAdapterRequest):Promise<AIModelAdapterResult> { if(request.signal.aborted) return {status:"cancelled",adapterId:this.descriptor.adapterId,modelId:request.modelId,diagnostics:[],metadata:{},startedAt:"",completedAt:"",durationMs:0}; return {status:"succeeded",adapterId:this.descriptor.adapterId,modelId:request.modelId,output:{outputType:request.expectedOutputType,text:"deterministic-test-output",references:[],citations:[],finishReason:"completed",modelMetadata:{}},diagnostics:[],metadata:{},startedAt:"",completedAt:"",durationMs:0}; }
+}

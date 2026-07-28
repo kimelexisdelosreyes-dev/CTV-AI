@@ -1,0 +1,9 @@
+flowchart LR
+  P[Presentation] --> A[Adapter]
+  A --> S[Services]
+  S --> R[Registry]
+  R --> V[Providers]
+  V --> X[Source adapters]
+  X --> D[Data]
+  V -. prohibited .-> G[Graph services]
+  G -. prohibited .-> V

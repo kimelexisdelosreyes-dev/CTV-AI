@@ -3,16 +3,22 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import Counter
+from collections.abc import Callable
+from threading import BoundedSemaphore, Lock
 from time import perf_counter
 from typing import Mapping
 
 from app.atlas.constants import (
+    ATLAS_COMPILER_CONTRACT_VERSION,
     ATLAS_CONTEXT_PACKAGE_VERSION,
+    ATLAS_MANIFEST_VERSION,
     ATLAS_PROVIDER_CONTRACT_VERSION,
     ATLAS_RUNTIME_VERSION,
 )
 from app.atlas.diagnostics import safe_provider_diagnostic
-from app.atlas.errors import AtlasErrorCategory
+from app.atlas.compiler import AtlasCompilationResult, AtlasContextCompiler
+from app.atlas.compiler_contracts import AtlasCompilationSnapshot
+from app.atlas.errors import AtlasErrorCategory, AtlasRuntimeError
 from app.atlas.health import failed_health
 from app.atlas.lifecycle import transition_record
 from app.atlas.metrics import AtlasRuntimeMetrics, atlas_runtime_metrics
@@ -27,12 +33,19 @@ from app.atlas.models import (
     utc_now,
 )
 from app.atlas.provider import AtlasRuntimeContext
+from app.atlas.provider_orchestration import (
+    AtlasProviderExecutionOutcome,
+    AtlasProviderExecutionRequest,
+    AtlasProviderOrchestrator,
+)
 from app.atlas.readiness import state_readiness
 from app.atlas.registry import AtlasProviderRegistry
+from app.atlas.runtime_compilation import AtlasCompilationOperationalMetrics
 from app.core.config import settings
 
 
 logger = logging.getLogger(__name__)
+ATLAS_COMPILATION_CONCURRENCY_LIMIT = 4
 
 
 class AtlasRuntimeManager:
@@ -43,6 +56,10 @@ class AtlasRuntimeManager:
         registry: AtlasProviderRegistry,
         *,
         metrics: AtlasRuntimeMetrics = atlas_runtime_metrics,
+        compiler: AtlasContextCompiler | None = None,
+        compiler_factory: Callable[[], AtlasContextCompiler] = AtlasContextCompiler,
+        compilation_concurrency_limit: int = ATLAS_COMPILATION_CONCURRENCY_LIMIT,
+        provider_orchestrator: AtlasProviderOrchestrator | None = None,
     ) -> None:
         self.registry = registry
         self.metrics = metrics
@@ -57,6 +74,14 @@ class AtlasRuntimeManager:
         self._health_task: asyncio.Task[None] | None = None
         self._shutdown_complete = False
         self._initialize_lock = asyncio.Lock()
+        self._compiler = compiler
+        self._compiler_factory = compiler_factory
+        self._compiler_constructed = compiler is not None
+        self._compilation_concurrency_limit = max(int(compilation_concurrency_limit), 1)
+        self._compilation_slots = BoundedSemaphore(self._compilation_concurrency_limit)
+        self._compilation_state_lock = Lock()
+        self.compilation_metrics = AtlasCompilationOperationalMetrics()
+        self._provider_orchestrator = provider_orchestrator
 
     def _new_records(self) -> dict[str, AtlasProviderRuntimeRecord]:
         return {
@@ -74,7 +99,12 @@ class AtlasRuntimeManager:
         )
 
     def _set_runtime_state(self, state: AtlasRuntimeState) -> None:
-        self.runtime_state = state
+        lock = getattr(self, "_compilation_state_lock", None)
+        if lock is None:
+            self.runtime_state = state
+        else:
+            with lock:
+                self.runtime_state = state
         self.metrics.gauge(
             "atlas_runtime_state",
             float(list(AtlasRuntimeState).index(state)),
@@ -119,6 +149,21 @@ class AtlasRuntimeManager:
                 self.initialized_at = utc_now()
                 self._set_runtime_state(AtlasRuntimeState.STOPPED)
                 return
+
+            if self._compiler is None:
+                try:
+                    self._compiler = self._compiler_factory()
+                    self._compiler_constructed = True
+                except Exception:
+                    logger.exception("atlas.compiler_initialization_failed")
+                    self._set_runtime_state(AtlasRuntimeState.FAILED)
+                    return
+            if self._provider_orchestrator is None:
+                self._provider_orchestrator = AtlasProviderOrchestrator(
+                    self.registry,
+                    self.compile_context,
+                    state_provider=lambda provider_id: self.records[provider_id].state,
+                )
 
             context = AtlasRuntimeContext.create(
                 configuration=self._configuration_snapshot(),
@@ -191,6 +236,74 @@ class AtlasRuntimeManager:
             if settings.ctv_one_atlas_health_poll_enabled and self.records:
                 self._health_stop.clear()
                 self._health_task = asyncio.create_task(self._health_poll_loop())
+
+    @property
+    def compiler(self) -> AtlasContextCompiler | None:
+        return self._compiler
+
+    def compile_context(
+        self, snapshot: AtlasCompilationSnapshot
+    ) -> AtlasCompilationResult:
+        """Compile only a caller-supplied immutable snapshot."""
+        if not isinstance(snapshot, AtlasCompilationSnapshot):
+            raise AtlasRuntimeError(AtlasErrorCategory.COMPILATION_SNAPSHOT_INVALID)
+        with self._compilation_state_lock:
+            state = self.runtime_state
+            enabled = settings.ctv_one_atlas_enabled
+            compiler = self._compiler
+        if not enabled:
+            raise AtlasRuntimeError(AtlasErrorCategory.DISABLED)
+        if state == AtlasRuntimeState.STOPPING:
+            raise AtlasRuntimeError(AtlasErrorCategory.COMPILER_STOPPING)
+        if state != AtlasRuntimeState.READY or compiler is None:
+            raise AtlasRuntimeError(AtlasErrorCategory.COMPILER_NOT_READY)
+        if not self._compilation_slots.acquire(blocking=False):
+            raise AtlasRuntimeError(AtlasErrorCategory.COMPILER_NOT_READY)
+        self.compilation_metrics.begin()
+        started = perf_counter()
+        try:
+            result = compiler.compile(snapshot)
+            self.compilation_metrics.succeed(
+                duration_ms=(perf_counter() - started) * 1000,
+                result=result,
+            )
+            return result
+        except AtlasRuntimeError as exc:
+            self.compilation_metrics.fail(
+                duration_ms=(perf_counter() - started) * 1000,
+                error_category=exc.category.value,
+            )
+            raise
+        except Exception as exc:
+            logger.exception("atlas.compilation_failed")
+            self.compilation_metrics.fail(
+                duration_ms=(perf_counter() - started) * 1000,
+                error_category=AtlasErrorCategory.COMPILATION_FAILED.value,
+            )
+            raise AtlasRuntimeError(AtlasErrorCategory.COMPILATION_FAILED) from exc
+        finally:
+            self.compilation_metrics.finish()
+            self._compilation_slots.release()
+
+    @property
+    def provider_orchestrator(self) -> AtlasProviderOrchestrator | None:
+        return self._provider_orchestrator
+
+    async def execute_provider_plan(
+        self, request: AtlasProviderExecutionRequest
+    ) -> AtlasProviderExecutionOutcome:
+        if not isinstance(request, AtlasProviderExecutionRequest):
+            raise AtlasRuntimeError(AtlasErrorCategory.PROVIDER_INPUT_INVALID)
+        if not settings.ctv_one_atlas_enabled:
+            raise AtlasRuntimeError(AtlasErrorCategory.DISABLED)
+        with self._compilation_state_lock:
+            state = self.runtime_state
+            orchestrator = self._provider_orchestrator
+        if state == AtlasRuntimeState.STOPPING:
+            raise AtlasRuntimeError(AtlasErrorCategory.COMPILER_STOPPING)
+        if state != AtlasRuntimeState.READY or orchestrator is None:
+            raise AtlasRuntimeError(AtlasErrorCategory.COMPILER_NOT_READY)
+        return await orchestrator.execute(request)
 
     async def health_check(self, provider_id: str) -> AtlasProviderHealth:
         record = self.records[provider_id]
@@ -392,6 +505,15 @@ class AtlasRuntimeManager:
         if self._shutdown_complete:
             return
         self._set_runtime_state(AtlasRuntimeState.STOPPING)
+        deadline = asyncio.get_running_loop().time() + settings.ctv_one_atlas_shutdown_timeout_seconds
+        while (
+            self.compilation_metrics.active()
+            or (
+                self._provider_orchestrator is not None
+                and self._provider_orchestrator.metrics.safe_snapshot()["active"]
+            )
+        ) and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.001)
         self._health_stop.set()
         if self._health_task:
             self._health_task.cancel()
@@ -478,6 +600,42 @@ class AtlasRuntimeManager:
             "runtime_version": ATLAS_RUNTIME_VERSION,
             "provider_contract_version": ATLAS_PROVIDER_CONTRACT_VERSION,
             "context_package_version": ATLAS_CONTEXT_PACKAGE_VERSION,
+            "compiler_contract_version": ATLAS_COMPILER_CONTRACT_VERSION,
+            "manifest_version": ATLAS_MANIFEST_VERSION,
+            "compiler_available": (
+                settings.ctv_one_atlas_enabled
+                and self._compiler is not None
+                and self.runtime_state == AtlasRuntimeState.READY
+            ),
+            "compiler_readiness": (
+                "disabled"
+                if not settings.ctv_one_atlas_enabled
+                else "stopping"
+                if self.runtime_state == AtlasRuntimeState.STOPPING
+                else "ready"
+                if self.runtime_state == AtlasRuntimeState.READY
+                and self.compilation_metrics.active() < self._compilation_concurrency_limit
+                else "busy"
+                if self.runtime_state == AtlasRuntimeState.READY
+                else self.runtime_state.value
+            ),
+            "compilation_concurrency_limit": self._compilation_concurrency_limit,
+            "compilation": self.compilation_metrics.safe_snapshot(),
+            "provider_orchestrator_available": (
+                settings.ctv_one_atlas_enabled
+                and self._provider_orchestrator is not None
+                and self.runtime_state == AtlasRuntimeState.READY
+            ),
+            "provider_orchestration_concurrency_limit": (
+                self._provider_orchestrator.concurrency_limit
+                if self._provider_orchestrator is not None
+                else 0
+            ),
+            "provider_orchestration": (
+                self._provider_orchestrator.metrics.safe_snapshot()
+                if self._provider_orchestrator is not None
+                else {}
+            ),
             "initialized_at": self.initialized_at.isoformat() if self.initialized_at else None,
             "stopped_at": self.stopped_at.isoformat() if self.stopped_at else None,
             "registered_provider_count": len(self.records),

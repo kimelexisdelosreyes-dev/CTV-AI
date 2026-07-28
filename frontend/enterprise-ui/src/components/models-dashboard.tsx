@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Play, RefreshCw } from "lucide-react";
 
 import {
@@ -50,7 +50,7 @@ export function ModelsDashboard({ developerStatus }: Props) {
     );
   }, [models]);
 
-  async function loadModels() {
+  const loadModels = useCallback(async () => {
     if (!developerStatus?.enabled) return;
 
     setLoading(true);
@@ -69,11 +69,14 @@ export function ModelsDashboard({ developerStatus }: Props) {
     } finally {
       setLoading(false);
     }
-  }
+  }, [developerStatus?.enabled]);
 
   useEffect(() => {
-    loadModels();
-  }, [developerStatus?.enabled]);
+    const handle = window.setTimeout(() => {
+      void loadModels();
+    }, 0);
+    return () => window.clearTimeout(handle);
+  }, [loadModels]);
 
   async function runBenchmark() {
     if (!comparisonModel) return;

@@ -1,0 +1,7 @@
+import type { SearchResult } from "@/contracts/search";
+import type { ComputeNode, InfrastructureNode, StorageVolume, Workstation } from "@/domain/infrastructure";
+function normalized(node: InfrastructureNode, providerId: string, type: SearchResult["type"], metadata: Record<string, string>): SearchResult { return { key: `infrastructure:${node.id}`, title: node.name, type, providerId, relevance: 18, metadata: { source: "Local Infrastructure Metadata", role: node.role, status: node.status, capabilities: node.capabilities.join(", "), ...metadata }, relationships: node.relationships.map((relationship) => ({ type: relationship.type, label: relationship.label, confidence: 1 })) }; }
+export const normalizeInfrastructure = (node: InfrastructureNode) => normalized(node, "infrastructure", "service", {});
+export const normalizeStorage = (node: StorageVolume) => normalized(node, "storage", "storage", { tier: node.tier, location: node.location, capacity: node.capacityNote });
+export const normalizeWorkstation = (node: Workstation) => normalized(node, "workstations", "workstation", { owner: node.owner ?? "Not represented", department: node.department ?? "Not represented", gpu: node.gpu ?? "Not represented", cpu: node.cpu ?? "Not represented", memory: node.memory ?? "Not represented" });
+export const normalizeCompute = (node: ComputeNode) => normalized(node, "compute", "service", { models: node.models?.join(", ") ?? "Not represented", resources: node.resources?.join(", ") ?? "Not represented" });

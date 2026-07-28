@@ -1,0 +1,13 @@
+sequenceDiagram
+  participant UI as Universal Search
+  participant A as Presentation adapter
+  participant S as SearchService
+  participant R as Registry
+  participant P as Providers
+  UI->>A: query
+  A->>S: normalized request
+  S->>R: discover
+  R->>P: parallel execution
+  P-->>S: normalized results
+  S-->>A: ranked result + diagnostics
+  A-->>UI: existing view model

@@ -11,7 +11,7 @@ from app.atlas.metrics import atlas_runtime_metrics
 
 def test_empty_context_package_is_valid_and_serialization_is_deterministic() -> None:
     package = create_empty_context_package("request-1")
-    assert package.contract_version == "1.0"
+    assert package.contract_version == "1.1"
     assert package.deterministic_json() == package.deterministic_json()
     assert any(
         name.startswith("atlas_context_package_created_count")

@@ -40,6 +40,17 @@ Open:
 http://127.0.0.1:8000/docs
 ```
 
+## Office LAN Access
+
+To present CTV ONE from this workstation to other laptops on the same Private office network, use:
+
+```powershell
+cd B:\CTV_AI
+.\scripts\start-lan.ps1
+```
+
+See [docs/LAN_ACCESS.md](docs/LAN_ACCESS.md) for firewall rules, test URLs, and troubleshooting.
+
 ## Open WebUI Connection
 
 ```text

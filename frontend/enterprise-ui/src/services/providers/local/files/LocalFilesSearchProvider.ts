@@ -1,0 +1,5 @@
+import type { SearchProviderResponse, SearchQuery } from "@/contracts/search";
+import { BaseProvider, type ProviderContext } from "../../sdk";
+import { localFileRecords } from "./local-files-source";
+import { normalizeLocalFile } from "./local-files-normalizer";
+export class LocalFilesSearchProvider extends BaseProvider { readonly id = "local-files"; readonly name = "Local Files"; readonly capabilities = ["search"] as const; protected async execute(query: SearchQuery, context: ProviderContext): Promise<SearchProviderResponse> { if (context.signal.aborted) return { status: "cancelled", results: [], durationMs: 0 }; const terms = query.text.toLowerCase().split(/\s+/).filter(Boolean); const results = localFileRecords().filter((record) => { const haystack = [record.title, record.owner, record.relatedProject, record.source, record.path, record.transcript, record.summary, ...record.tags].join(" ").toLowerCase(); return terms.some((term) => haystack.includes(term)); }).map(normalizeLocalFile); return { status: "ready", results, durationMs: 0 }; } }

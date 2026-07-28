@@ -1,0 +1,7 @@
+import type { ContextSnapshot } from "@/contracts/context";
+import type { GraphNeighborhood, GraphPath, GraphSnapshot, GraphTraversalOptions } from "@/contracts/graph";
+export type GraphRuntimeStatus = "idle" | "building" | "ready" | "stale" | "failed" | "cancelled";
+export type GraphRuntimeDiagnostics = { sourceContextSnapshotId?: string; requestVersion: number; acceptedVersion: number; reused: boolean; staleRejected: boolean; cancelled: boolean; failed: boolean; previousSessionRetained: boolean; message?: string };
+export type GraphRuntimeSession = Readonly<{ sessionId: string; version: number; sourceContextSnapshotId: string; sourceContextTimestamp: string; graphSnapshot: GraphSnapshot; status: GraphRuntimeStatus; createdAt: string; completedAt: string; diagnostics: Readonly<GraphRuntimeDiagnostics>; nodeCount: number; edgeCount: number; unresolvedReferenceCount: number; provisionalIdentityCount: number }>;
+export type GraphRuntimeResult = { session?: GraphRuntimeSession; status: GraphRuntimeStatus; diagnostics: GraphRuntimeDiagnostics };
+export interface IGraphRuntimeService { current(): GraphRuntimeSession | undefined; build(snapshot: ContextSnapshot, signal?: AbortSignal): Promise<GraphRuntimeResult>; invalidate(snapshotId?: string): void; reset(): void; neighborhood(nodeId: string, options?: GraphTraversalOptions): GraphNeighborhood | undefined; shortestPath(from: string, to: string, options?: GraphTraversalOptions): GraphPath | undefined; }

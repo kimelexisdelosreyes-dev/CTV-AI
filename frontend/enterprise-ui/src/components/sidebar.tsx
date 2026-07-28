@@ -4,6 +4,7 @@ import {
   Bot,
   Brain,
   BookOpen,
+  Files,
   Gauge,
   LayoutDashboard,
   LogOut,
@@ -11,6 +12,7 @@ import {
   Users,
   Workflow,
 } from "lucide-react";
+import { AppSidebar, SidebarItem, SidebarSection } from "@/design-system";
 
 export type Section =
   | "overview"
@@ -18,6 +20,7 @@ export type Section =
   | "brain"
   | "knowledge"
   | "operations"
+  | "files"
   | "infrastructure";
 
 type Props = {
@@ -27,17 +30,18 @@ type Props = {
 };
 
 const items = [
-  { id: "overview" as const, label: "Overview", icon: LayoutDashboard },
-  { id: "assistants" as const, label: "AI Assistants", icon: Bot },
-  { id: "brain" as const, label: "Company Brain", icon: Brain },
+  { id: "overview" as const, label: "Workspace", icon: LayoutDashboard },
+  { id: "assistants" as const, label: "AI Studio", icon: Bot },
+  { id: "brain" as const, label: "My AI", icon: Brain },
   { id: "knowledge" as const, label: "Knowledge Center", icon: BookOpen },
-  { id: "operations" as const, label: "Operations", icon: Workflow },
-  { id: "infrastructure" as const, label: "Infrastructure", icon: Gauge },
+  { id: "operations" as const, label: "Projects", icon: Workflow },
+  { id: "files" as const, label: "Files", icon: Files },
+  { id: "infrastructure" as const, label: "Enterprise Control Center", icon: Gauge },
 ];
 
 export function Sidebar({ active, onChange, onLogout }: Props) {
   return (
-    <aside className="sidebar">
+    <AppSidebar>
       <div className="brand-lockup">
         <div className="brand-mark">C</div>
         <div>
@@ -46,18 +50,17 @@ export function Sidebar({ active, onChange, onLogout }: Props) {
         </div>
       </div>
 
-      <nav>
+      <SidebarSection label="CTV ONE product areas">
         {items.map(({ id, label, icon: Icon }) => (
-          <button
-            className={active === id ? "nav-item active" : "nav-item"}
+          <SidebarItem
+            active={active === id}
+            icon={<Icon size={18} />}
             key={id}
+            label={label}
             onClick={() => onChange(id)}
-          >
-            <Icon size={18} />
-            {label}
-          </button>
+          />
         ))}
-      </nav>
+      </SidebarSection>
 
       <div className="sidebar-spacer" />
 
@@ -66,9 +69,7 @@ export function Sidebar({ active, onChange, onLogout }: Props) {
         <span><Settings size={15} /> Settings</span>
       </div>
 
-      <button className="nav-item logout" onClick={onLogout}>
-        <LogOut size={18} /> Sign out
-      </button>
-    </aside>
+      <SidebarItem icon={<LogOut size={18} />} label="Sign out" onClick={onLogout} />
+    </AppSidebar>
   );
 }

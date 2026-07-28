@@ -1,0 +1,6 @@
+flowchart LR
+  S[SearchService] --> R[SearchRegistry]
+  R --> B[BaseProvider lifecycle]
+  B --> X[Source adapter]
+  X --> D[Local-demo data]
+  B --> N[Normalize + provenance]

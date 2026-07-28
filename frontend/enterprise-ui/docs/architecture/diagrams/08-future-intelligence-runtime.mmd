@@ -1,0 +1,6 @@
+flowchart LR
+  S[Search] --> C[ContextSnapshot]
+  C --> G[GraphRuntimeSession]
+  G -. planned .-> M[MemorySnapshot]
+  M -. planned .-> A[AI context package]
+  A -. planned .-> O[AI Orchestrator]

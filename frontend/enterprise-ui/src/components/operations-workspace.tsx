@@ -9,16 +9,23 @@ import {
   useRef,
 } from "react";
 import {
-  AlertTriangle,
-  CalendarClock,
-  CheckCircle2,
   ExternalLink,
   RefreshCw,
-  Search,
-  ServerCog,
-  Workflow,
 } from "lucide-react";
 
+import {
+  EmptyState,
+  InlineAlert,
+  LoadingSkeleton,
+  MetricCard,
+  PageHeader,
+  PageShell,
+  PageTitle,
+  PrimaryButton,
+  SearchInput,
+  StatusBadge,
+  SyncStatus,
+} from "@/design-system";
 import {
   apiFetch,
   ConnectorTask,
@@ -62,19 +69,19 @@ function isOverdue(task: ConnectorTask, now: Date): boolean {
   return new Date(task.due_at).getTime() < now.getTime();
 }
 
-function statusClass(status: string | null): string {
+function statusTone(status: string | null): "healthy" | "critical" | "processing" | "neutral" {
   const value = (status ?? "").toLowerCase();
 
   if (value.includes("done") || value.includes("complete")) {
-    return "status-chip status-done";
+    return "healthy";
   }
   if (value.includes("stuck") || value.includes("blocked")) {
-    return "status-chip status-stuck";
+    return "critical";
   }
   if (value.includes("working") || value.includes("progress")) {
-    return "status-chip status-working";
+    return "processing";
   }
-  return "status-chip status-neutral";
+  return "neutral";
 }
 
 function priorityClass(priority: string | null): string {
@@ -276,123 +283,77 @@ export function OperationsWorkspace({ state, setState }: Props) {
     : "Not updated yet";
 
   if (loading) {
-    return <section className="panel">Loading Operations Workspace...</section>;
+    return <LoadingSkeleton lines={7} />;
   }
 
   return (
-    <section>
-      <div className="page-heading operations-heading">
-        <div>
-          <span className="eyebrow">ENTERPRISE OPERATIONS</span>
-          <h1>Operations Workspace</h1>
-          <p>
+    <PageShell>
+      <PageHeader
+        eyebrow="PROJECT INTELLIGENCE"
+        title={<PageTitle>Projects</PageTitle>}
+        description={
+          <p className="ctv-body">
             {updatedLabel}
             {state.freshness === "stale" ? " - Data may be stale" : ""}
             {refreshing ? " - Refreshing..." : ""}
+            {state.syncMessage && state.syncStatus !== "suspicious_empty"
+              ? ` - ${state.syncMessage}`
+              : ""}
           </p>
-          {state.syncMessage && state.syncStatus !== "suspicious_empty" && (
-            <p>{state.syncMessage}</p>
-          )}
-        </div>
-
-        <button
-          className="operations-refresh"
-          onClick={() => load("manual")}
-          disabled={refreshing}
-        >
-          <RefreshCw size={16} className={refreshing ? "spin" : ""} />
+        }
+        action={
+          <PrimaryButton
+            disabled={refreshing}
+            leadingIcon={<RefreshCw size={16} className={refreshing ? "spin" : ""} />}
+            onClick={() => load("manual")}
+          >
           {refreshing ? "Refreshing..." : "Refresh monday"}
-        </button>
-      </div>
+          </PrimaryButton>
+        }
+      />
 
       {error && (
-        <article className="panel operations-error">
-          <AlertTriangle size={18} />
-          <div>
-            <b>
-              {lastUpdated
-                ? "Latest refresh failed"
-                : "Operations refresh failed"}
-            </b>
-            <p>{error}</p>
+        <InlineAlert
+          status="critical"
+          title={lastUpdated ? "Latest refresh failed" : "Operations refresh failed"}
+        >
+            {error}
             {lastUpdated && (
-              <p>Showing data from {new Date(lastUpdated).toLocaleString()}.</p>
+              <> Showing data from {new Date(lastUpdated).toLocaleString()}.</>
             )}
-          </div>
-        </article>
+        </InlineAlert>
       )}
 
       {state.syncStatus === "suspicious_empty" && state.syncMessage && (
-        <article className="panel operations-error">
-          <AlertTriangle size={18} />
-          <div>
-            <b>Previous snapshot retained</b>
-            <p>{state.syncMessage}</p>
-          </div>
-        </article>
+        <InlineAlert title="Previous snapshot retained" status="warning">
+          {state.syncMessage}
+        </InlineAlert>
       )}
 
       {!loading && state.freshness === "empty" && (
-        <article className="panel operations-error">
-          <AlertTriangle size={18} />
-          <div>
-            <b>No operations snapshot yet</b>
-            <p>Refresh monday.com to create the first server snapshot.</p>
-          </div>
-        </article>
+        <EmptyState title="No synchronized projects are available.">
+          Projects synchronized from Monday.com will appear here.
+        </EmptyState>
       )}
 
       <div className="metric-grid operations-metrics">
-        <article className="metric-card">
-          <Workflow size={18} />
-          <span>Active tasks</span>
-          <strong>{summary.active}</strong>
-        </article>
-
-        <article className="metric-card">
-          <CalendarClock size={18} />
-          <span>Due today</span>
-          <strong>{summary.dueToday}</strong>
-        </article>
-
-        <article className="metric-card">
-          <AlertTriangle size={18} />
-          <span>Overdue</span>
-          <strong>{summary.overdue}</strong>
-        </article>
-
-        <article className="metric-card">
-          <CheckCircle2 size={18} />
-          <span>Completed</span>
-          <strong>{summary.completed}</strong>
-        </article>
-
-        <article className="metric-card">
-          <ServerCog size={18} />
-          <span>Connected boards</span>
-          <strong>{summary.boards}</strong>
-        </article>
-
-        <article className="metric-card connector-metric">
-          <span>monday.com status</span>
-          <strong className={mondayHealth?.status === "healthy" ? "good" : "bad"}>
-            {mondayHealth?.status ?? "unknown"}
-          </strong>
-          <small>{lastChecked}</small>
-        </article>
+        <MetricCard label="Active tasks" value={summary.active} status="processing" />
+        <MetricCard label="Due today" value={summary.dueToday} status="warning" />
+        <MetricCard label="Overdue" value={summary.overdue} status={summary.overdue ? "critical" : "healthy"} />
+        <MetricCard label="Completed" value={summary.completed} status="healthy" />
+        <MetricCard label="Connected boards" value={summary.boards} status="neutral" />
+        <MetricCard label={`monday.com status - ${lastChecked}`} value={mondayHealth?.status ?? "unknown"} status={mondayHealth?.status === "healthy" ? "healthy" : "critical"} />
       </div>
 
       <div className="operations-grid">
         <article className="panel operations-main">
           <div className="operations-toolbar">
-            <div className="operations-search">
-              <Search size={16} />
-              <input
-                placeholder="Search tasks, boards, groups, status..."
-                value={query}
-                onChange={(event) => setFilter("query", event.target.value)}
-              />
-            </div>
+            <SearchInput
+              placeholder="Search tasks, boards, groups, status..."
+              value={query}
+              onChange={(event) => setFilter("query", event.target.value)}
+              onClear={() => setFilter("query", "")}
+            />
 
             <select value={board} onChange={(event) => setFilter("board", event.target.value)}>
               <option value="all">All boards</option>
@@ -455,9 +416,9 @@ export function OperationsWorkspace({ state, setState }: Props) {
                     </td>
 
                     <td>
-                      <span className={statusClass(task.status)}>
+                      <StatusBadge status={statusTone(task.status)}>
                         {task.status ?? "Not set"}
-                      </span>
+                      </StatusBadge>
                     </td>
 
                     <td>
@@ -493,7 +454,9 @@ export function OperationsWorkspace({ state, setState }: Props) {
                 {filteredTasks.length === 0 && (
                   <tr>
                     <td colSpan={7} className="operations-empty">
-                      No tasks match the current filters.
+                      <EmptyState title="No synchronized projects are available.">
+                        No tasks match the current filters.
+                      </EmptyState>
                     </td>
                   </tr>
                 )}
@@ -544,9 +507,7 @@ export function OperationsWorkspace({ state, setState }: Props) {
             <h2>Connector</h2>
             <div className="status-row">
               <span>monday.com</span>
-              <b className={mondayHealth?.status === "healthy" ? "good" : "bad"}>
-                {mondayHealth?.status ?? "unknown"}
-              </b>
+              <SyncStatus synced={mondayHealth?.status === "healthy"} />
             </div>
             <p className="muted">
               {mondayHealth?.detail ?? "No connector detail available."}
@@ -554,7 +515,7 @@ export function OperationsWorkspace({ state, setState }: Props) {
           </article>
         </aside>
       </div>
-    </section>
+    </PageShell>
   );
 
   function setFilter(key: keyof OperationsFilters, value: string) {

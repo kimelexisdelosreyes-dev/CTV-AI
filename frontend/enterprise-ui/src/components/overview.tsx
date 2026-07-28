@@ -1,5 +1,21 @@
 import { KnowledgeStats, User } from "@/lib/api";
 import { InfrastructureStatusRow } from "@/lib/infrastructure-status";
+import {
+  HealthCard,
+  PageHeader,
+  PageShell,
+  PageTitle,
+  ResponsiveGrid,
+  Section,
+  StatusBadge,
+} from "@/design-system";
+import { buildWorkspaceBriefing } from "@/features/workspace/workspace-briefing";
+import { DailyBriefing } from "@/features/workspace/components/DailyBriefing";
+import { OperationalPulse } from "@/features/workspace/components/OperationalPulse";
+import { ContinueWorking } from "@/features/workspace/components/ContinueWorking";
+import { TodayPriorities } from "@/features/workspace/components/TodayPriorities";
+import { WorkspaceAIActivity } from "@/features/workspace/components/WorkspaceAIActivity";
+import { EnterpriseHealthSummary } from "@/features/workspace/components/EnterpriseHealthSummary";
 
 type Props = {
   user: User;
@@ -8,56 +24,43 @@ type Props = {
 };
 
 export function Overview({ user, stats, infrastructure }: Props) {
-  const cards = [
-    ["Documents", stats?.total_documents ?? 0],
-    ["Knowledge chunks", stats?.total_chunks ?? 0],
-    ["Ready sources", stats?.ready_documents ?? 0],
-    ["Failed sources", stats?.failed_documents ?? 0],
-  ];
+  const briefing = buildWorkspaceBriefing({ user, stats, infrastructure });
 
   return (
-    <section>
-      <div className="page-heading">
-        <div>
-          <span className="eyebrow">CTV ONE OPERATIONS</span>
-          <h1>Good day, {user.full_name.split(" ")[0]}.</h1>
-          <p>Your local AI platform is online and ready.</p>
-        </div>
-        <span className="role-pill">{user.role}</span>
-      </div>
+    <PageShell>
+      <PageHeader
+        eyebrow="CTV ONE WORKSPACE"
+        title={<PageTitle>Workspace Intelligence</PageTitle>}
+        description={<p className="ctv-body">Daily briefing for current work, priorities, AI activity, and operational health.</p>}
+        action={<StatusBadge status="neutral">{briefing.role}</StatusBadge>}
+      />
 
-      <div className="metric-grid">
-        {cards.map(([label, value]) => (
-          <article className="metric-card" key={label}>
-            <span>{label}</span>
-            <strong>{value}</strong>
-          </article>
-        ))}
-      </div>
+      <DailyBriefing briefing={briefing} />
+      <OperationalPulse metrics={briefing.pulse} />
 
-      <div className="two-column">
-        <article className="panel">
-          <h2>Platform status</h2>
-          {(infrastructure ?? []).map((service) => (
-            <div className="status-row" key={service.key}>
-              <span>{service.label}</span>
-              <b className={service.isHealthy ? "good" : "bad"}>
-                Status: {service.status}
-              </b>
-            </div>
+      <ResponsiveGrid min="320px" className="workspace-primary-grid">
+        <ContinueWorking item={briefing.continueItem} />
+        <TodayPriorities priorities={briefing.priorities} />
+      </ResponsiveGrid>
+
+      <ResponsiveGrid min="320px" className="workspace-secondary-grid">
+        <WorkspaceAIActivity groups={briefing.activityGroups} />
+        <EnterpriseHealthSummary services={briefing.health} />
+      </ResponsiveGrid>
+
+      <Section>
+        <h2 className="ctv-section-title">Recent Organizational Activity</h2>
+        <ResponsiveGrid min="260px">
+          {(infrastructure ?? []).slice(0, 3).map((service) => (
+            <HealthCard
+              detail={`Status: ${service.status}. Category: ${service.category}.`}
+              healthy={service.isHealthy}
+              key={service.key}
+              title={service.label}
+            />
           ))}
-          {!infrastructure?.length && (
-            <p className="muted">Status data is unavailable.</p>
-          )}
-        </article>
-
-        <article className="panel">
-          <h2>Next capabilities</h2>
-          <div className="roadmap-item"><b>Company Brain</b><span>Controlled company knowledge and source-grounded answers.</span></div>
-          <div className="roadmap-item"><b>Hokkien AI</b><span>Dictionary, annotation, and verified language learning.</span></div>
-          <div className="roadmap-item"><b>Media Intelligence</b><span>Search transcripts, metadata, and eventually footage.</span></div>
-        </article>
-      </div>
-    </section>
+        </ResponsiveGrid>
+      </Section>
+    </PageShell>
   );
 }

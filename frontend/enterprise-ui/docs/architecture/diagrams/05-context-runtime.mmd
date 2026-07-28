@@ -1,0 +1,5 @@
+flowchart LR
+  I[Explicit runtime input] --> C[ContextEngine]
+  R[Normalized search results] --> A[SearchContextContributions]
+  A --> C
+  C --> S[Immutable ContextSnapshot]

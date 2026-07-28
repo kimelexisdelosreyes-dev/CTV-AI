@@ -1,4 +1,6 @@
 from app.core.prompts import ASSISTANT_PROMPTS
+from app.atlas.bootstrap import atlas_shadow_mode_service
+from app.shadow_mode import production_prompt_from_messages, shadow_request_id
 from app.schemas.chat import AssistantName
 from app.services.ollama_service import ollama_service
 
@@ -32,12 +34,25 @@ class AIRouter:
         ]
         return [{"role": "system", "content": system_prompt}, *filtered_messages]
 
-    async def chat(self, message: str, assistant: AssistantName) -> str:
+    async def chat(
+        self,
+        message: str,
+        assistant: AssistantName,
+        *,
+        user_identifier: str | None = None,
+    ) -> str:
         messages = self.build_messages(
             [{"role": "user", "content": message}],
             assistant,
         )
-        return await ollama_service.chat(messages)
+        production_prompt = production_prompt_from_messages(messages)
+        routed_messages, _, _ = await atlas_shadow_mode_service.route_messages(
+            messages=messages,
+            request_id=shadow_request_id(production_prompt),
+            user_identifier=user_identifier,
+            intent=f"chat_{assistant}",
+        )
+        return await ollama_service.chat(routed_messages)
 
 
 ai_router = AIRouter()

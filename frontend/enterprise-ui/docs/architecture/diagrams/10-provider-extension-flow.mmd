@@ -1,0 +1,7 @@
+flowchart LR
+  N[New source] --> A[Source adapter]
+  A --> P[SDK provider + manifest]
+  P --> R[Registry registration]
+  R --> S[Normalized SearchResult]
+  S --> C[Context contribution]
+  C --> G[Graph contribution]

@@ -3,7 +3,21 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+import pytest_asyncio
 
+from app.atlas.registry import AtlasProviderRegistry
+from app.atlas.runtime_manager import AtlasRuntimeManager
+from app.shadow_mode import (
+    AtlasTrace,
+    AtlasTraceCanarySummary,
+    AtlasTraceComparisonSummary,
+    AtlasTraceFeatureFlags,
+    AtlasTraceLifecycleSummary,
+    AtlasTraceNodeSummary,
+    AtlasTraceProviderSummary,
+    AtlasTraceTimingSummary,
+    AtlasTraceTokenSummary,
+)
 from app.atlas.models import (
     AtlasHealthStatus,
     AtlasProviderDefinition,
@@ -89,4 +103,92 @@ def atlas_settings(monkeypatch):
     monkeypatch.setattr(settings, "ctv_one_atlas_shutdown_timeout_seconds", 0.05)
     monkeypatch.setattr(settings, "ctv_one_atlas_failure_threshold", 3)
     monkeypatch.setattr(settings, "ctv_one_atlas_recovery_threshold", 2)
+    monkeypatch.setattr(settings, "ctv_one_atlas_shadow_enabled", False)
+    monkeypatch.setattr(settings, "ctv_one_atlas_canary_enabled", False)
+    monkeypatch.setattr(settings, "ctv_one_atlas_live_enabled", False)
 
+
+@pytest_asyncio.fixture
+async def initialized_runtime(atlas_settings):
+    runtime = AtlasRuntimeManager(AtlasProviderRegistry())
+    await runtime.initialize()
+    yield runtime
+    await runtime.shutdown()
+
+
+@pytest.fixture
+def shadow_trace_factory():
+    def factory(request_id: str) -> AtlasTrace:
+        return AtlasTrace(
+            trace_id=f"trace-{request_id}",
+            request_id=request_id,
+            compilation_snapshot_fingerprint="a" * 64,
+            package_fingerprint="b" * 64,
+            manifest_reference={"manifest_digest": "c" * 64},
+            forge_context_fingerprint="d" * 64,
+            provider_summary=AtlasTraceProviderSummary(
+                registered_providers=0,
+                selected_providers=0,
+                successful=0,
+                partial=0,
+                failed=0,
+                timeouts=0,
+            ),
+            node_summary=AtlasTraceNodeSummary(
+                compiled_nodes=0,
+                retained_nodes=0,
+                dropped_nodes=0,
+            ),
+            token_summary=AtlasTraceTokenSummary(
+                estimated_package_tokens=1,
+                estimated_forge_tokens=0,
+                budget=4000,
+                retained=0,
+                dropped=0,
+            ),
+            timing_summary=AtlasTraceTimingSummary(
+                provider_orchestration_ms=0,
+                compiler_ms=0,
+                adapter_ms=0,
+                comparison_ms=0,
+                trace_ms=0,
+                total_ms=0,
+            ),
+            lifecycle_summary=AtlasTraceLifecycleSummary(
+                runtime_state="ready",
+                shadow_enabled=True,
+                adapter_enabled=True,
+                compiler_ready=True,
+            ),
+            feature_flags=AtlasTraceFeatureFlags(
+                shadow_enabled=True,
+                canary_enabled=False,
+                live_enabled=False,
+                canary_percentage=0,
+            ),
+            canary_summary=AtlasTraceCanarySummary(
+                policy_decision="shadow_only",
+                canary_eligible=False,
+                feature_source="canary_disabled",
+                fallback_reason="canary_disabled",
+                atlas_active=False,
+                live_active=False,
+                atlas_injected=False,
+                rollback_active=False,
+            ),
+            comparison_summary=AtlasTraceComparisonSummary(
+                production_prompt_bytes=1,
+                shadow_prompt_bytes=2,
+                delta_bytes=1,
+                production_prompt_tokens=1,
+                shadow_prompt_tokens=1,
+                delta_tokens=0,
+                production_section_count=1,
+                shadow_section_count=2,
+                atlas_addition_count=1,
+                atlas_context_bytes=1,
+                atlas_context_tokens=1,
+            ),
+        )
+
+    return factory

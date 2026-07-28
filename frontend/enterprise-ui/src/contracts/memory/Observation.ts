@@ -1,0 +1,10 @@
+export type ObservationType = "created" | "modified" | "file_imported" | "subtitle_generated" | "project_renamed" | "render_completed" | "document_archived" | "provider_synchronized" | "unknown";
+export type ObservationSource = "provider" | "graph" | "context" | "import" | "unknown";
+export type ObservationConfidence = "confirmed" | "supported" | "observed" | "imported" | "unknown";
+export type ObservationTimestamp = Readonly<{ occurredAt: string; recordedAt?: string }>;
+export type ObservationReference = Readonly<{ entityId: string; graphNodeId?: string; providerId?: string; sourceId?: string }>;
+export type ObservationEvidence = Readonly<{ type: "provider_record" | "graph_reference" | "context_reference" | "indexed_metadata"; source: ObservationSource; reference: string; timestamp?: string }>;
+export type ObservationMetadata = Readonly<Record<string, string>>;
+export type ObservationParticipant = Readonly<{ entityId: string; role?: string }>;
+export type ObservationRelationship = Readonly<{ type: string; targetEntityId: string; evidence?: ObservationEvidence }>;
+export type Observation = Readonly<{ id: string; entityId: string; graphNodeId?: string; type: ObservationType; timestamp: ObservationTimestamp; source: ObservationSource; providerId?: string; evidence: readonly ObservationEvidence[]; confidence: ObservationConfidence; metadata?: ObservationMetadata; participants: readonly ObservationParticipant[]; relationships: readonly ObservationRelationship[]; diagnostics: readonly string[] }>;

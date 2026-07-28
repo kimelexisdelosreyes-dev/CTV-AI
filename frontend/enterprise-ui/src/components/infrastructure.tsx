@@ -1,4 +1,15 @@
 import { DeveloperConsole } from "@/components/developer-console";
+import { EnterpriseMap } from "@/components/enterprise-map";
+import {
+  AIServiceNode,
+  EmptyState,
+  InlineAlert,
+  PageHeader,
+  PageShell,
+  PageTitle,
+  ResponsiveGrid,
+  SystemHealthSummary,
+} from "@/design-system";
 import { User } from "@/lib/api";
 import { InfrastructureStatusRow } from "@/lib/infrastructure-status";
 
@@ -8,37 +19,57 @@ type Props = {
 };
 
 export function Infrastructure({ data, user }: Props) {
+  const healthy = Boolean(data?.every((service) => service.isHealthy));
+
   return (
-    <section>
-      <div className="page-heading">
-        <div>
-          <span className="eyebrow">SYSTEM HEALTH</span>
-          <h1>Infrastructure</h1>
-          <p>Live health from CTV-AI Core.</p>
-        </div>
-      </div>
+    <PageShell>
+      <PageHeader
+        eyebrow="ENTERPRISE CONTROL CENTER"
+        title={<PageTitle>Enterprise Control Center</PageTitle>}
+        description={<p className="ctv-body">Enterprise Health for platform services, storage readiness, AI activity, and integrations.</p>}
+      />
 
-      <div className="assistant-grid">
+      <SystemHealthSummary
+        healthy={healthy}
+        detail={healthy ? "No enterprise alerts require attention." : "One or more Enterprise Infrastructure services need attention."}
+      />
+
+      <ResponsiveGrid min="240px">
         {(data ?? []).map((service) => (
-          <article className="assistant-card" key={service.key}>
-            <div
-              className={
-                service.isHealthy ? "health-dot good-bg" : "health-dot bad-bg"
-              }
-            />
-            <h3>{service.label}</h3>
-            <p className={service.isHealthy ? "good" : "bad"}>
-              Status: {service.status}
-            </p>
-            <p>Category: {service.category}</p>
-            <p>Model: {service.model}</p>
-          </article>
+          <AIServiceNode
+            key={service.key}
+            status={service.isHealthy ? "healthy" : "critical"}
+            title={service.label}
+          >
+            <p className="ctv-metadata">Status: {service.status}</p>
+            <p className="ctv-metadata">Category: {service.category}</p>
+            {user.role === "admin" && (
+              <p className="ctv-metadata">Technical detail: {service.model}</p>
+            )}
+          </AIServiceNode>
         ))}
-      </div>
+      </ResponsiveGrid>
 
-      {!data?.length && <p className="muted">Status data is unavailable.</p>}
+      {!data?.length && (
+        <EmptyState title="No enterprise alerts require attention.">
+          System status data is unavailable. Workspace and Knowledge Center
+          remain available while Enterprise Health refreshes.
+        </EmptyState>
+      )}
+
+      {!healthy && data?.length ? (
+        <InlineAlert title="Enterprise Health degraded" status="warning">
+          A service is reporting a non-healthy status. Unaffected modules remain
+          available.
+        </InlineAlert>
+      ) : null}
+
+      <section className="ctv-section">
+        <h2 className="ctv-section-title">Enterprise Map</h2>
+        <EnterpriseMap />
+      </section>
 
       {user.role === "admin" && <DeveloperConsole />}
-    </section>
+    </PageShell>
   );
 }

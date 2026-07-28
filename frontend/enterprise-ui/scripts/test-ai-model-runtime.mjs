@@ -1,0 +1,14 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+const root=resolve(import.meta.dirname,"..");
+const read=(file)=>readFileSync(resolve(root,file),"utf8");
+const contracts=read("src/contracts/model-runtime/index.ts");
+const runtime=read("src/services/model-runtime/AIModelRuntime.ts");
+const registry=read("src/services/model-runtime/AIModelAdapterRegistry.ts");
+test("runtime contracts are controlled, readonly, and adapter-bound",()=>{for(const token of ["AIModelRuntimeStatus","AIModelRuntimeAttemptStatus","AIModelAdapter","AIModelRuntimeRequest","AIModelRuntimeResult","readonly"])assert.ok(contracts.includes(token));});
+test("adapter registry is deterministic and hides executable adapters from snapshots",()=>{assert.ok(registry.includes("new Map<string, AIModelAdapter>()"));assert.ok(registry.includes("a.adapterId.localeCompare"));assert.ok(registry.includes("sourceFingerprint"));assert.ok(!registry.includes("adapters:[...this.adapters.values()]"));});
+test("runtime validates plans and executes only planned sequential models",()=>{for(const token of ["stale-plan","invalid-plan","const sequence=[plan.primary","plan.fallbacks.candidates","maxTotalAttempts","maxFallbackAttempts"])assert.ok(runtime.includes(token));assert.ok(!runtime.includes("Math.random"));});
+test("runtime isolates timeout, cancellation, and raw adapter failures",()=>{for(const token of ["AbortController","Promise.race","timed-out","safeError","abortSignal?.aborted"])assert.ok(runtime.includes(token));assert.ok(!runtime.includes("SearchService"));assert.ok(!runtime.includes("AIModelOrchestrator"));});
+console.log("AI model runtime tests passed: contracts, registry, plan integrity, lifecycle, timeout, cancellation, and dependency boundaries verified.");

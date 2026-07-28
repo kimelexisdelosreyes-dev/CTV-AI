@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     app_name: str = "CTV-AI Core"
     app_version: ClassVar[str] = APP_VERSION
     api_v1_prefix: str = "/api/v1"
+    cors_allowed_origins: str = (
+        "http://127.0.0.1:3001,"
+        "http://localhost:3001"
+    )
 
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen3:8b"
@@ -153,6 +157,46 @@ class Settings(BaseSettings):
     ctv_one_atlas_shutdown_timeout_seconds: float = 15.0
     ctv_one_atlas_failure_threshold: int = 3
     ctv_one_atlas_recovery_threshold: int = 2
+    ctv_one_forge_atlas_enabled: bool = False
+    ctv_one_forge_atlas_max_tokens: int = 4000
+    ctv_one_atlas_shadow_enabled: bool = False
+    ctv_one_atlas_canary_enabled: bool = False
+    ctv_one_atlas_live_enabled: bool = False
+    ctv_one_atlas_canary_percentage: int = 0
+    ctv_one_atlas_canary_users: str = ""
+    ctv_one_atlas_canary_emergency_disabled: bool = False
+    ctv_one_nexus_provider_enabled: bool = True
+    ctv_one_nexus_max_entities: int = 16
+    ctv_one_nexus_max_relationships: int = 32
+    ctv_one_nexus_max_traversal_depth: int = 2
+    ctv_one_nexus_max_execution_seconds: float = 1.0
+    ctv_one_nexus_max_import_batches: int = 16
+    ctv_one_nexus_max_metadata_bytes: int = 4096
+    ctv_one_nexus_max_entity_aliases: int = 8
+    ctv_one_nexus_max_relationships_per_entity: int = 64
+    ctv_one_nexus_max_snapshot_bytes: int = 1_000_000
+    ctv_one_nexus_max_build_seconds: float = 5.0
+    ctv_one_nexus_ingestion_enabled: bool = False
+    ctv_one_nexus_company_brain_connector_enabled: bool = False
+    ctv_one_nexus_archive_connector_enabled: bool = False
+    ctv_one_nexus_max_connectors_per_run: int = 4
+    ctv_one_nexus_max_records_per_connector: int = 1_000
+    ctv_one_nexus_connector_timeout_seconds: float = 5.0
+    ctv_one_nexus_import_history_capacity: int = 100
+    ctv_one_nexus_previous_snapshot_retained: bool = True
+    ctv_one_nexus_incremental_enabled: bool = False
+    ctv_one_nexus_validate_only_default: bool = True
+    ctv_one_knowledge_evolution_enabled: bool = False
+    ctv_one_knowledge_evolution_event_capacity: int = 10_000
+    ctv_one_knowledge_evolution_recommendation_capacity: int = 1_000
+    ctv_one_knowledge_evolution_minimum_sample_size: int = 10
+    ctv_one_knowledge_evolution_stale_days_default: int = 90
+    ctv_one_knowledge_evolution_connector_failure_threshold: float = 0.2
+    ctv_one_knowledge_evolution_empty_retrieval_threshold: float = 0.2
+    ctv_one_knowledge_evolution_fallback_threshold: float = 0.1
+    ctv_one_knowledge_evolution_budget_pressure_threshold: float = 80.0
+    ctv_one_knowledge_evolution_unused_entity_threshold: float = 0.8
+    ctv_one_knowledge_evolution_recommendation_suppression_hours: int = 24
 
     model_config = SettingsConfigDict(
         env_file=".env",

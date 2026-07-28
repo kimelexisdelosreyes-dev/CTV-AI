@@ -1,0 +1,6 @@
+flowchart LR
+  C[ContextSnapshot] --> R[GraphRuntimeService]
+  R --> B[GraphBuilder]
+  B --> S[GraphRuntimeSession]
+  S --> P[GraphPresentationAdapter]
+  P --> U[Relationship panel and mini map]
