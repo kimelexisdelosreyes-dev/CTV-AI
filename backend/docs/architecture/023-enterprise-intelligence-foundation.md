@@ -1,0 +1,3 @@
+# Enterprise Intelligence Foundation
+
+Version 1.0 establishes provider-neutral immutable contracts for knowledge, memory, retrieval results, and character budgets. `KnowledgeManager` and `MemoryManager` validate ordered contexts only; policies define rules without retrieval, ranking algorithms, storage, providers, or prompt integration. Diagnostics expose only manager, policy, counts, duration, and warnings. Company Brain and knowledge retrieval remain owned by existing services; memory persistence remains outside this package. Future integration may map these contracts into the Prompt Engine without redesigning them.

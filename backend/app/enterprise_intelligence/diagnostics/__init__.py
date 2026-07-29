@@ -1,0 +1,1 @@
+from .intelligence_trace import EnterpriseIntelligenceTrace

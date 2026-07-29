@@ -1,0 +1,2 @@
+const messages: Record<string, string> = { company_brain: "Searching company knowledge…", document_analysis: "Analyzing document…", meeting_summary: "Preparing summary…" };
+export function CapabilityLoading({ capabilityId }: { capabilityId?: string }) { const message = capabilityId ? (messages[capabilityId] ?? "Preparing capability…") : "Loading available capabilities…"; return <section className="capability-loading" aria-busy="true" aria-live="polite"><span aria-hidden="true" /><p>{message}</p></section>; }

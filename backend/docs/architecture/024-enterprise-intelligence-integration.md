@@ -1,0 +1,3 @@
+# Enterprise Intelligence Integration
+
+The default-off `CTV_ONE_ENTERPRISE_INTELLIGENCE_ENABLED` gate reserves the integration boundary without changing current AIRouter behavior. KnowledgeAdapter and MemoryAdapter map already-retrieved Company Brain, Knowledge Service, and employee-context values into immutable Enterprise Intelligence contracts. EnterpriseIntegrationCoordinator validates and returns RetrievalResult; it performs no retrieval, storage, ranking, provider calls, or prompt formatting. Prompt Engine and runtime remain provider-neutral and unchanged. Future Sprint 3 may connect approved coordinator output at the existing context boundary.

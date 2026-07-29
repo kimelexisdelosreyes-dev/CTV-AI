@@ -19,6 +19,7 @@ from app.api.routes import (
     runtime,
     version,
 )
+from app.api.v1.capabilities import router as capabilities
 
 api_router = APIRouter()
 api_router.include_router(health.router)
@@ -36,6 +37,7 @@ api_router.include_router(knowledge.router)
 api_router.include_router(orchestrator.router)
 api_router.include_router(chat.router)
 api_router.include_router(runtime.router)
+api_router.include_router(capabilities.router)
 
 openai_router = APIRouter()
 openai_router.include_router(openai_compat.router)

@@ -9,6 +9,7 @@ import {
   LayoutDashboard,
   LogOut,
   Settings,
+  Sparkles,
   Users,
   Workflow,
 } from "lucide-react";
@@ -40,6 +41,7 @@ const items = [
 ];
 
 export function Sidebar({ active, onChange, onLogout }: Props) {
+  const capabilitiesEnabled = process.env.NEXT_PUBLIC_CTV_ONE_CAPABILITIES_ENABLED === "true";
   return (
     <AppSidebar>
       <div className="brand-lockup">
@@ -60,6 +62,7 @@ export function Sidebar({ active, onChange, onLogout }: Props) {
             onClick={() => onChange(id)}
           />
         ))}
+        {capabilitiesEnabled && <SidebarItem icon={<Sparkles size={18} />} label="Capabilities" onClick={() => { window.location.href = "/capabilities"; }} />}
       </SidebarSection>
 
       <div className="sidebar-spacer" />

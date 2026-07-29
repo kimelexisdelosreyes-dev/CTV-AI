@@ -1,0 +1,2 @@
+from app.capabilities.business.shared import MetadataCapabilityHandler
+class DocumentAnalysisCapabilityHandler(MetadataCapabilityHandler): output_kind="document-analysis"

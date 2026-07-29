@@ -1,0 +1,5 @@
+# Capability Request API
+
+The protected versioned Capability API exposes discovery and explicit execution at `/api/v1/capabilities`. Both `CTV_ONE_CAPABILITY_API_ENABLED` and `CTV_ONE_CAPABILITY_FRAMEWORK_ENABLED` default false. The service builds registered framework handlers, invokes only the existing dispatcher/router/executor path, and returns provider-neutral safe metadata. Chat remains unchanged; capability IDs are explicit and never inferred from prompt text.
+
+Governance is deterministic and in-memory: AVAILABLE + healthy + compatible metadata permits dispatch; DISABLED, DEPRECATED, unavailable/missing metadata, unhealthy, or incompatible records reject before dispatcher/handler invocation. API=false disables execution; API=true/framework=false returns `CAPABILITY_FRAMEWORK_DISABLED`; both true permits approved execution. Errors expose stable codes only, never request content, prompts, documents, provider payloads, tokens, or traces. Focused contract/discovery/execution/flag/identity/error/governance/integration tests and full-suite evidence are required for rollout; lifecycle persistence is outside Sprint 1.

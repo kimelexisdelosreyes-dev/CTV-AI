@@ -1,0 +1,1 @@
+class EnterpriseIntelligenceError(Exception): pass
